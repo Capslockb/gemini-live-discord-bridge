@@ -1,86 +1,231 @@
 # Troubleshooting
 
-Common bridge failures and how to fix them.
+Common bridge failures and how to fix them. For implementation details, see [`gemini-live-implementation.md`](gemini-live-implementation.md).
 
-## "Bridge failed to start"
+## `/voice-live` cannot infer my voice channel
 
-Most common cause: **Discord CDN handshake quirk** (criterion #38, see `AGENTS.md`). The voice WebSocket endpoint rejects the first 5 handshakes with code 4006 before accepting. A single `channel.connect()` takes ~27 seconds of internal retries.
+The slash wrapper infers the channel from `DISCORD_VOICE_LIVE_USER_ID`.
 
-**Do not** restart the gateway repeatedly to "retry" — each restart resets the retry clock and you'll hit the rate limit harder.
+Check:
 
-**What to do**: wait ~30 seconds. The bridge will connect on its own.
+```bash
+grep '^DISCORD_VOICE_LIVE_USER_ID=' ~/.hermes/.env
+```
 
-## "Bridge still starting" hangs on `/voice-live`
+Then join a Discord voice channel before running `/voice-live`.
 
-If a previous bridge is in `_active_bridges` but `vc.is_connected()` is False, the new `/voice-live` will hang with "Bridge still starting" instead of starting fresh.
+If you start via Hermes tool call instead of the slash command, pass `guild_id` and `channel_id` explicitly.
 
-**Fix**: the `__init__.py:voice_live()` handler should detect stale entries (vc disconnected) and pop them. If you see this hang in production, restart the gateway (`systemctl --user restart hermes-gateway`) and the cleanup will run on boot.
+## Bridge seems slow to start
 
-## First-turn "I see you're sharing your screen" hallucination
+Let one connect cycle finish. Discord voice connect can take time, and repeatedly restarting the gateway can reset retries or make rate limits worse.
 
-Two root causes (criterion #34):
-1. The system prompt told the model "if someone shares their screen..." — Gemini hallucinated this as an implied task on every connect.
-2. The first-turn mute (`audioStreamEnd` after setup) wasn't being sent.
+Watch logs:
 
-**Verify the fix is in**: `bridge.py` should have an `await self._gemini._ws.send(json.dumps({"realtimeInput": {"audioStreamEnd": True}}))` right after `await self._gemini.connect()`.
+```bash
+journalctl --user -u hermes-gateway -f
+```
 
-## Token burn on connect
+Look for:
 
-The bridge sends `setupComplete` → `audioStreamEnd` immediately to prevent the model from starting a first autonomous turn. If you see logs showing model output within 100ms of `setupComplete`, the audioStreamEnd is not being sent or the model is generating despite it.
+- `VoiceLive: connecting`
+- `Control API listening on 127.0.0.1:18943`
+- `Setup complete for model ...`
+- `VoiceLive: bridge active`
 
-**Check**: `journalctl --user -u hermes-gateway -n 50 --no-pager | grep setupComplete`
+## Health check says not started
 
-## Voice CDN rate limit (4006 after 5 attempts)
+```bash
+curl -s http://127.0.0.1:18943/health | python3 -m json.tool
+```
 
-A long-running session can hit the rate limit. The bridge handles it by waiting up to 60s for `secret_key` readiness. If it still fails, the gateway returns an error. Wait 5-10 minutes before retrying.
+If the sidecar is unavailable, the bridge is not running or the port differs from `DISCORD_VOICE_LIVE_PORT`.
+
+If the sidecar returns:
+
+```json
+{"status":"not_started","running":false}
+```
+
+then the HTTP server is reachable but no active bridge object is registered.
+
+## Mutating sidecar routes return `401 unauthorized`
+
+`/health` and `/notes` are read-only and unauthenticated. These routes require `X-API-Secret`:
+
+- `/stop`
+- `/say`
+- `/frame`
+- `/notify`
+
+Use:
+
+```bash
+SECRET=$(cat ~/.hermes/voice-live-control-secret)
+curl -s -H "X-API-Secret: $SECRET" "http://127.0.0.1:18943/say?text=ping"
+```
+
+If the secret file is missing, check `DISCORD_VOICE_LIVE_SECRET_FILE` and gateway logs for control-secret initialization warnings.
+
+## Gemini setup fails for all models
+
+The code tries `GEMINI_MODEL` first, then unique entries from `GEMINI_LIVE_MODEL_FALLBACKS`.
+
+Check:
+
+```bash
+grep -E '^(GEMINI_API_KEY|GOOGLE_API_KEY|GEMINI_MODEL|GEMINI_LIVE_MODEL_FALLBACKS)=' ~/.hermes/.env
+journalctl --user -u hermes-gateway -n 100 --no-pager | grep -i 'Gemini Live model\|Gemini connect failed\|setup'
+```
+
+If you see a schema error around setup fields, compare the code with [`gemini-live-implementation.md`](gemini-live-implementation.md). `mediaResolution` and top-level `voice_activity_detection` are intentionally omitted.
+
+## First-turn hallucination or unwanted opening line
+
+The bridge sends an empty `audioStreamEnd` immediately after `setupComplete` to suppress unwanted first-turn generation.
+
+If you still hear a greeting, check:
+
+```bash
+grep '^DISCORD_VOICE_LIVE_GREETING=' ~/.hermes/.env
+```
+
+The code default is currently `I'm here.`. Set this empty for a silent connection:
+
+```bash
+DISCORD_VOICE_LIVE_GREETING=
+```
+
+Then restart:
+
+```bash
+systemctl --user restart hermes-gateway
+```
+
+## No inbound audio reaches Gemini
+
+Check health:
+
+```bash
+curl -s http://127.0.0.1:18943/health | python3 -m json.tool
+```
+
+Look for:
+
+- `voice_connected: true`
+- `receiving_active: true`
+- `voice_sink_frames` increasing
+- `voice_sink_decoded_frames` increasing when you speak
+- `audio_in_chunks` increasing when speech passes the gate
+
+Common causes:
+
+- `discord-ext-voice-recv` missing or not loaded;
+- the user is filtered out by `DISCORD_VOICE_LIVE_ALLOWED_SPEAKERS`;
+- the speaker is a bot, which the sink ignores;
+- speech is too quiet for the simple peak-energy gate.
+
+## Audio output plays late or keeps talking over the user
+
+The bridge has two interruption paths:
+
+1. Gemini-side `START_OF_ACTIVITY_INTERRUPTS`.
+2. Local output queue clear when speech energy is detected during an open model turn.
+
+Check these env values:
+
+```bash
+DISCORD_VOICE_LIVE_CLEAR_ON_INTERRUPT=true
+DISCORD_VOICE_LIVE_OUTPUT_READ_WAIT_SECONDS=0.005
+DISCORD_VOICE_LIVE_OUTPUT_PREROLL_MS=320
+DISCORD_VOICE_LIVE_OUTPUT_TAIL_PAD_MS=240
+```
+
+If interruptions are still slow, inspect health for `local_interrupt_events` and logs for `serverContent.interrupted` behavior.
+
+## `/frame` drops images
+
+Check:
+
+```bash
+curl -s http://127.0.0.1:18943/health | python3 -m json.tool | grep video
+```
+
+Common drop reasons:
+
+| Reason | Meaning |
+|---|---|
+| `disabled` | `DISCORD_VOICE_LIVE_VIDEO_ENABLED=false` |
+| `unsupported_mime` | Only JPEG, PNG, and WebP are accepted |
+| `size_limit` | Payload exceeds `DISCORD_VOICE_LIVE_VIDEO_MAX_BYTES` |
+| `fps_limit` | More than 1 fps by default |
+| `no_recent_voice` | Frame was not forced and no recent voice activity occurred |
+
+Manual forced frame test:
+
+```bash
+SECRET=$(cat ~/.hermes/voice-live-control-secret)
+curl -s \
+  -H "X-API-Secret: $SECRET" \
+  -H "Content-Type: image/jpeg" \
+  --data-binary @frame.jpg \
+  "http://127.0.0.1:18943/frame?force=true&source=manual"
+```
 
 ## Tool calls hang
 
-`_run_local_tool` runs in a thread-pool. Long-running tools (delegation, web search) should return control immediately and let the user poll for status. If a tool blocks the worker thread, **all** subsequent tool calls queue up.
+Gemini `toolCall` messages are handled in the receive loop, but blocking handlers are sent through an executor. Long-running tools should return status quickly and let the user poll.
 
-**Watch for**: tools that don't return a `dict` within 30 seconds. They might be stuck on a network call. Check `journalctl --user -u hermes-gateway -n 20 --no-pager` for the traceback.
+Watch logs:
 
-## Fallback chain always picks opencode
+```bash
+journalctl --user -u hermes-gateway -n 100 --no-pager | grep -i 'Gemini tool call\|tool call handler\|local_\|opencode_'
+```
 
-`FALLBACK_CHAIN["codex"]` is `["opencode", "hermes-api", "gemini"]` — opencode is the first fallback by design. If you want codex to fall back to a different neighbor, edit `delegation_agent.py:FALLBACK_CHAIN`.
+If a handler never returns, later tool calls can queue behind it.
 
-**Verify the health registry is working**: call `local_delegate_health(action="list")` from voice or `~/.hermes/voice-platform-health.json` from the shell. If a platform is in there with `seconds_remaining > 0`, it's still considered broken.
+## `toolCallCancellation` appears in logs
 
-## Sfx not playing
+The code currently logs cancellations but does not attempt rollback. If a tool already caused side effects, the bridge does not undo them.
 
-1. Check the WAV files exist: `ls -la ~/.hermes/voice-users/sfx/`
-2. Check the volumes: `DISCORD_VOICE_LIVE_SFX_<SLOT>_VOLUME=0.5` (default)
-3. Test manually: `local_sfx_test(action="list")` returns the configured slots
-4. Test playback: `local_sfx_test(slot="notification")` — should return `status: "played"`. If `no_active_source`, no voice session is running.
+For risky future tools, prefer idempotent actions, dry-run defaults, or explicit confirmation before side effects.
 
-If the sfx is loaded but inaudible, the source's audio queue might be stuck. Restart the gateway to reset.
+## Email brief returns `no backend`
 
-## Email brief returns "no backend"
+Both configured email backends failed or are unavailable.
 
-Both backends (`google_api.py` and `himalaya`) failed. Common causes:
-- `google_api.py` not authenticated: run `python ~/.hermes/hermes-agent/skills/productivity/google-workspace/scripts/google_api.py auth`
-- `himalaya` not configured: check `~/.config/himalaya/config.toml`
+Check:
 
-The brief is **graceful** when both fail — returns `{status: "ok", backend: "none", count: 0}` instead of crashing.
+```bash
+python ~/.hermes/hermes-agent/skills/productivity/google-workspace/scripts/google_api.py auth
+```
 
-## Notification not delivered
+Also check any `himalaya` configuration if that backend is expected.
 
-`local_notify` returns `{status, channel, results, notified_at}`. Check `channel`:
-- `voice` — the model will speak it in the next turn
-- `dm` — sent via bot DM
-- `channel` — posted in a text channel
-- `webhook` — fired a webhook event
-- `no_subscribers` — no webhook URL configured for `agent.notify`
+## Home Assistant tools do not appear
 
-If `channel: "no_subscribers"` and you expected a DM, the bot might not share a guild with the target user. Verify the bot is in the same server.
+`DISCORD_VOICE_LIVE_HA_TOOLS=true` is not enough. The code also requires `HASS_TOKEN` to be non-empty.
+
+```bash
+grep -E '^(HASS_URL|HASS_TOKEN|DISCORD_VOICE_LIVE_HA_TOOLS)=' ~/.hermes/.env
+```
+
+## Autostart does not join voice
+
+Autostart intentionally waits for the configured user to be in a voice channel to avoid token burn.
+
+Check:
+
+```bash
+grep -E '^(DISCORD_VOICE_LIVE_AUTOSTART|DISCORD_VOICE_LIVE_AUTOSTART_FILE|DISCORD_VOICE_LIVE_USER_ID|DISCORD_VOICE_LIVE_GUILD_ID|DISCORD_VOICE_LIVE_CHANNEL_ID)=' ~/.hermes/.env
+```
+
+The code default for `DISCORD_VOICE_LIVE_KEEP_AUTOSTART_FILE` is `true`.
 
 ## Log locations
 
-- **Gateway**: `journalctl --user -u hermes-gateway -f` or `~/.hermes/logs/gateway.log`
-- **Plugin**: same journalctl, with `VoiceLive:` prefix in messages
-- **Errors**: `~/.hermes/logs/errors.log`
-- **Opencode tmux logs**: `/tmp/delegate-<platform>-<timestamp>.log`
-
-## Voice bridges down after gateway restart
-
-Voice bridges (ports 18943 and 9232) are consistently down after gateway restart. The gateway needs to bind the sockets, then ~30s for the Discord CDN handshake. Don't restart repeatedly — let one connect cycle complete.
+- Gateway: `journalctl --user -u hermes-gateway -f`
+- Hermes logs: `~/.hermes/logs/`
+- Bridge notes/transcripts: `~/.hermes/voice-live-notes/` by default
+- SFX files: `~/.hermes/voice-users/sfx/`
+- Control secret: `~/.hermes/voice-live-control-secret` by default
