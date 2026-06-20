@@ -1,73 +1,138 @@
 # Architecture
 
-End-to-end audio path, threading model, and lifecycle of the Discord voice bridge.
+End-to-end audio path, Gemini Live WebSocket lifecycle, sidecar control API, and Hermes plugin entrypoints for the Discord voice bridge.
+
+For the deeper Gemini-specific protocol notes, see [`gemini-live-implementation.md`](gemini-live-implementation.md).
 
 ## Audio path
 
+```text
+Discord voice channel
+    ↓ discord-ext-voice-recv decode
+48 kHz stereo PCM16, 20 ms frames
+    ↓ GeminiPCMSink.write()
+fast speech-energy gate + speaker/bot filters
+    ↓ downsample_for_gemini()
+16 kHz mono PCM16
+    ↓ GeminiLiveBridge._send_loop()
+Gemini Live realtimeInput.audio over WSS
+    ↓ serverContent.modelTurn.parts[].inlineData
+24 kHz mono PCM16
+    ↓ LiveAudioSource.feed()
+48 kHz stereo PCM16
+    ↓ discord.AudioSource.read()
+Discord voice playback
 ```
-Discord Voice (Opus)
-    ↓  discord-ext-voice-recv decode
-48 kHz PCM stereo (16-bit)
-    ↓  VoiceListener._feed_audio
-16 kHz PCM mono  (24 kHz internally, then downsampled in GeminiLiveBridge)
-    ↓  WebSocket binary frame
-Gemini Multimodal Live API  (WSS)
-    ↓  WebSocket binary frame
-24 kHz PCM mono  (PCM16)
-    ↓  LiveAudioSource.feed
-48 kHz PCM stereo (upsample_for_discord)
-    ↓  discord.AudioSource
-Discord Voice (Opus encode)
-```
 
-## Threading model
+Important correction: there is no intentional 24 kHz internal input stage before Gemini. Discord input is downsampled to **16 kHz mono** before being sent to Gemini. Gemini audio output is treated as **24 kHz mono** and then upsampled to Discord's 48 kHz stereo playback format.
 
-The bridge runs **three** long-lived threads plus a small pool of timers.
+## Main runtime objects
 
-| Thread | Owner | Purpose |
+| Object | File | Purpose |
 |---|---|---|
-| **Gateway event loop** | `discord.py` | Owns the bot, voice client, and all `LiveAudioSource` playback. Async. |
-| **Gemini receive loop** | `GeminiLiveBridge._ws_recv_loop` | Reads WSS frames, dispatches audio / tool calls / transcripts. Runs `_run_in_executor` for any blocking work. |
-| **Tool worker** | `_run_local_tool` (module-level) | Synchronous; called from a thread-pool for each Gemini `toolCalls` event. |
-| **Schedulers** | `notification.start_scheduler`, `email_brief.start_brief_scheduler` | Daemon threads, JSONL-polling, ~1-2s tick. |
+| `VoiceLiveBridge` | `bridge.py` | Owns the Discord voice client, listener, audio source, Gemini bridge, watchdog, idle handling, and shutdown. |
+| `GeminiLiveBridge` | `bridge.py` | Owns the Gemini WebSocket, setup payload, send/receive loops, reconnect, tool calls, notes, and metrics. |
+| `GeminiPCMSink` | `bridge.py` | Receives decoded Discord PCM, filters it, downsamples it, and forwards it to Gemini. |
+| `LiveAudioSource` | `bridge.py` | Receives Gemini 24 kHz mono audio, converts it to Discord 48 kHz stereo frames, and implements `discord.AudioSource`. |
+| Hermes plugin register | `__init__.py` | Registers Hermes tools and Discord slash commands, autostart, sidecar helpers, and active bridge registry. |
+
+## Async/threading model
+
+The bridge is mostly async, with a few important thread boundaries.
+
+| Component | Owner | Notes |
+|---|---|---|
+| Gateway event loop | Hermes / `discord.py` | Owns Discord client, voice connection, slash commands, and the running bridge task. |
+| Discord audio source read thread | `discord.py` voice playback | Calls `LiveAudioSource.read()`. This must use thread-safe `queue.Queue`, not `asyncio.Queue`. |
+| Gemini send loop | `GeminiLiveBridge._send_loop()` | Sends queued audio/video to Gemini and emits `audioStreamEnd` after input idles. |
+| Gemini receive loop | `GeminiLiveBridge._receive_loop()` | Reads server messages, plays output audio, records transcripts, handles tool calls, and reacts to reconnect signals. |
+| Tool workers | event loop executor | Blocking local/web/email/GitHub/delegation tools are pushed off the WebSocket receive loop. |
+| Schedulers | notification/email modules | Timer-style notification/email loops run independently and call the sidecar/bridge when needed. |
 
 ## Lifecycle
 
-1. **User runs `/voice-live` in Discord**
-2. `__init__.py:voice_live()` checks the user is in the target voice channel (user-presence gate, criterion #33). If not, it rejects with a "you're not in voice" message.
-3. If a stale bridge is in `_active_bridges` (vc disconnected), it's cleaned up.
-4. A new `VoiceLiveBridge` is created and `run()` is spawned as a background task.
-5. `VoiceLiveBridge.start()`:
-   - Calls `channel.connect()` (Discord CDN handshake quirk: first 5 attempts fail with code 4006; takes ~27s)
-   - Creates `LiveAudioSource` (the audio-output queue)
-   - Creates `GeminiLiveBridge` and registers it in `sfx.register_active_source` for cross-bridge sfx
-   - Wires `vc.listen()` (RX) and `vc.play()` (TX)
-   - Plays the `transition` sfx into the audio source
-   - Calls `await gemini.connect()` (sends setup message, waits for `setupComplete`)
-   - Sends `audioStreamEnd` immediately after `setupComplete` to mute first-turn
-   - Returns
-6. **Connection watchdog** polls `vc.is_connected()` and the user's voice-channel membership every 1s. If either fails, calls `stop()`.
-7. **Auto-leave** kicks in if `AUTO_LEAVE_QUIET_SECONDS` passes with no audio.
-8. **User runs `/voice-live-leave`** → `__init__.py:voice_live_leave()` calls `bridge.stop()`.
-9. `stop()` cancels the recv loop, ends the WSS, disconnects from the voice channel, deletes the autostart file (if any).
+1. User runs `/voice-live` in Discord, or Hermes calls the `voice_live` tool.
+2. `__init__.py` resolves the Discord adapter and infers the user's voice channel if explicit guild/channel IDs were not supplied.
+3. `_active_bridges` and `_STARTING` prevent duplicate starts and stale bridge collisions.
+4. `VoiceLiveBridge.start()` connects to Discord using `voice_recv.VoiceRecvClient`.
+5. The bridge wires `vc.listen(GeminiPCMSink(...))` for RX and `vc.play(LiveAudioSource(...))` for TX.
+6. A transition SFX is played if the SFX module is available.
+7. `GeminiLiveBridge.connect()` opens the Gemini WebSocket, sends the `setup` payload, waits for `setupComplete`, and starts send/receive tasks.
+8. `VoiceLiveBridge.start()` immediately sends an empty `audioStreamEnd` after setup to suppress unwanted first-turn generation.
+9. A watchdog checks Discord connectivity, target-user voice-channel presence, idle prompt timing, and auto-leave.
+10. `/voice-live-leave`, `voice_live_leave`, sidecar `/stop`, Discord disconnect, target-user departure, or reconnect failure stops the bridge.
+
+## Hermes tools and slash commands
+
+`__init__.py` currently registers these Hermes tools:
+
+| Tool | Purpose |
+|---|---|
+| `voice_live` | Start the Gemini Discord voice bridge. |
+| `voice_live_leave` | Stop the bridge for a guild. |
+| `voice_live_status` | Read `/health` and return live bridge status. |
+| `voice_live_frame` | Send a manual image frame to Gemini through the bridge. |
+| `voice_live_video_status` | Return video-feed counters/drop reasons. |
+| `voice_live_notes` | Read transcript/note events from `/notes`. |
+
+It also registers Discord slash command wrappers:
+
+- `/voice-live`
+- `/voice-live-leave`
+
+## Sidecar API
+
+The local sidecar binds to:
+
+```text
+127.0.0.1:${DISCORD_VOICE_LIVE_PORT:-18943}
+```
+
+Read-only routes:
+
+- `GET /health`
+- `GET /notes?limit=N`
+
+Mutating routes require `X-API-Secret`:
+
+- `/stop`
+- `/say?text=...`
+- `/frame`
+- `/notify`
+
+The control secret is generated by `__init__.py` and persisted via `DISCORD_VOICE_LIVE_SECRET_FILE`, defaulting to `~/.hermes/voice-live-control-secret`.
+
+## Reconnect and resumption
+
+`GeminiLiveBridge._receive_loop()` watches for `goAway`, WebSocket receive errors, and close code `1008`. Reconnect uses exponential backoff capped at 30 seconds, recreates queues, clears output-turn state, and asks `VoiceLiveBridge` to recreate the PCM sink.
+
+`sessionResumptionUpdate` is observed and a handle can be stored, but treat session resumption as partial plumbing until the setup payload explicitly includes `sessionResumption.handle`.
 
 ## Key files
 
 | File | Role |
 |---|---|
-| `__init__.py` | Hermes plugin entry. Registers `/voice-live`, `/voice-live-leave`, autostart mechanism, video frame control. |
-| `bridge.py` | Core. `VoiceLiveBridge`, `GeminiLiveBridge`, `LiveAudioSource`, audio I/O, all tool definitions, sidecar HTTP server. |
+| `__init__.py` | Hermes plugin entry, command/tool registration, autostart, sidecar helper calls, active bridge registry. |
+| `bridge.py` | Core Discord/Gemini bridge, audio conversion, Gemini protocol, tool declarations, sidecar server. |
+| `docs/gemini-live-implementation.md` | Code-grounded notes on Gemini Live setup, audio, video, tool calls, and reconnect behavior. |
 | `notification.py` | Multi-channel proactive notification dispatcher. |
-| `email_brief.py` | Inbox digest (scheduled + on-demand). |
-| `sfx.py` | Slot-based UI sound effects library. |
+| `email_brief.py` | Inbox digest and email summary paths. |
+| `sfx.py` | Slot-based UI sound effects. |
 | `delegation_agent.py` | Multi-CLI delegation with health registry and fallback chain. |
-| `user_profiles.py` | Per-user Honcho peer mapping, onboarding. |
+| `user_profiles.py` | Per-user profile, tool allowlist, Honcho peer mapping, onboarding. |
 | `webhook_dispatcher.py` | Event-class webhook fanout. |
 
-## Key env vars (full list in `env-vars.md`)
+## Key env vars
 
-- `DISCORD_VOICE_LIVE_PORT=18943` — sidecar HTTP control port
-- `DISCORD_VOICE_LIVE_USER_ID=<b_snowflake>` — who the bridge listens to
-- `DISCORD_VOICE_LIVE_AUTO_LEAVE_QUIET_SECONDS=900` — idle timeout
-- `DISCORD_VOICE_LIVE_VOICE=en-US-JennyNeural` — TTS voice
-- `DISCORD_VOICE_LIVE_TYPING_SFX=~/.hermes/voice-live-typing.wav` — keyboard click sfx
+See [`env-vars.md`](env-vars.md) for the longer list. The highest-impact values are:
+
+```bash
+DISCORD_BOT_TOKEN=***
+GEMINI_API_KEY=***
+GEMINI_MODEL=gemini-3.1-flash-live-preview
+DISCORD_VOICE_LIVE_VOICE=Kore
+DISCORD_VOICE_LIVE_PORT=18943
+DISCORD_VOICE_LIVE_ALLOWED_SPEAKERS=
+DISCORD_VOICE_LIVE_OUTPUT_PREROLL_MS=320
+GEMINI_AUDIO_STREAM_IDLE_END_SECONDS=0.25
+```
