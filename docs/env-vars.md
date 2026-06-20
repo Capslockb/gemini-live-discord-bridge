@@ -1,160 +1,142 @@
 # Environment variables
 
-All `DISCORD_VOICE_LIVE_*` env vars the plugin reads. Defaults shown in **bold**.
+Code-grounded environment variable reference for the current Gemini Discord voice bridge. Defaults are taken from `bridge.py`, `__init__.py`, and the related helper modules.
 
-## Required
+For protocol details, see [`gemini-live-implementation.md`](gemini-live-implementation.md).
 
-| Var | Description |
-|---|---|
-| `DISCORD_BOT_TOKEN` | Discord bot token |
-| `GEMINI_API_KEY` | Google Gemini API key |
-| `DISCORD_VOICE_LIVE_USER_ID` | Your Discord snowflake — the bridge listens to this user |
-
-## Core
+## Required / strongly recommended
 
 | Var | Default | Description |
 |---|---|---|
-| `GEMINI_MODEL` | `gemini-3.1-flash-live-preview` | Primary Gemini Live model |
-| `GEMINI_LIVE_MODEL_FALLBACKS` | — | Comma-separated fallback models, tried in order if primary fails |
-| `DISCORD_VOICE_LIVE_VOICE` | `en-US-JennyNeural` | TTS voice (criterion #3 — high-pitched female) |
-| `DISCORD_VOICE_LIVE_PORT` | `18943` | Sidecar HTTP control port |
-| `DISCORD_VOICE_LIVE_ALLOWED_SPEAKERS` | empty | Comma-separated list of user IDs the bridge accepts audio from. Empty = listen to the channel. |
-| `DISCORD_VOICE_LIVE_AUTO_LEAVE_QUIET_SECONDS` | `900` | Idle timeout (15 min) before the bridge auto-leaves |
-| `DISCORD_VOICE_LIVE_AUTO_LEAVE_MIN_UPTIME_SECONDS` | `30` | Don't auto-leave within the first 30s of a session (avoids killing right after start) |
-| `DISCORD_VOICE_LIVE_LEAVE_PHRASES` | (built-in list) | Phrases that trigger `/voice-live-leave` (e.g. "stop", "hang up", "bye", "exit voice") |
-| `DISCORD_VOICE_LIVE_GREETING` | — | Optional greeting text on first turn |
-| `DISCORD_VOICE_LIVE_CLEAR_ON_INTERRUPT` | `true` | When user interrupts the model, clear the audio queue |
-| `DISCORD_VOICE_LIVE_NOTES_DIR` | `~/.hermes/voice-live-notes/` | Where to write per-call notes |
-| `DISCORD_VOICE_LIVE_KEEP_AUTOSTART_FILE` | `false` | If true, the autostart file is not deleted after use |
-| `DISCORD_VOICE_LIVE_AUTOSTART` | `false` | Auto-join the channel in `voice-live-autostart.json` on gateway boot |
-| `DISCORD_VOICE_LIVE_AUTOSTART_FILE` | `~/.hermes/voice-live-autostart.json` | Path to the autostart file |
-| `DISCORD_VOICE_LIVE_GUILD_ID` | — | Guild ID for autostart; required if autostart is enabled |
-| `DISCORD_VOICE_LIVE_CHANNEL_ID` | — | Voice channel ID for autostart; required if autostart is enabled |
+| `DISCORD_BOT_TOKEN` | — | Discord bot token. Required by the Hermes Discord adapter / installer path. |
+| `GEMINI_API_KEY` | — | Gemini API key. Required unless `GOOGLE_API_KEY` is set. |
+| `GOOGLE_API_KEY` | — | Fallback Gemini API key used when `GEMINI_API_KEY` is empty. |
+| `DISCORD_VOICE_LIVE_USER_ID` | empty / deployment-specific fallback | Strongly recommended. Used for slash-command channel inference, target-user presence checks, and default Honcho peer naming. Explicit guild/channel tool calls can still work without it. |
 
-## Voice output
+## Gemini Live
 
 | Var | Default | Description |
 |---|---|---|
-| `GEMINI_AUDIO_STREAM_IDLE_END_SECONDS` | `0.25` | Time of audio silence before the model considers the user turn ended |
-| `DISCORD_VOICE_LIVE_OUTPUT_PREROLL_MS` | `200` | Pre-roll audio before first byte lands in Discord |
-| `DISCORD_VOICE_LIVE_OUTPUT_TAIL_PAD_MS` | `120` | Tail padding after last byte (prevents click on natural ends) |
-| `DISCORD_VOICE_LIVE_OUTPUT_FADE_IN_MS` | `60` | Fade-in on each chunk (prevents click on joins) |
-| `DISCORD_VOICE_LIVE_OUTPUT_READ_WAIT_SECONDS` | `0.05` | How long `LiveAudioSource.read()` blocks waiting for the next chunk |
+| `GEMINI_MODEL` | `gemini-3.1-flash-live-preview` | Primary Gemini Live model. Sent as `models/<model>` in setup. |
+| `GEMINI_LIVE_MODEL_FALLBACKS` | `gemini-3.1-flash-live-preview,gemini-2.5-flash-native-audio-preview-12-2025,gemini-2.5-flash-native-audio-preview-09-2025` | Comma-separated fallback candidates. The code deduplicates candidates and tries them in order. |
+| `DISCORD_VOICE_LIVE_VOICE` | `Kore` | Gemini prebuilt voice name used in `speechConfig.voiceConfig.prebuiltVoiceConfig`. |
+| `DISCORD_VOICE_LIVE_GREETING` | `I'm here.` | Optional text injected after Gemini connects. Set empty if you want a silent connection after first-turn mute. |
 
-## Idle prompts
-
-| Var | Default | Description |
-|---|---|---|
-| `DISCORD_VOICE_LIVE_IDLE_PROMPT_SECONDS` | `120` | Seconds of inactivity before the model generates a nudge |
-| `DISCORD_VOICE_LIVE_IDLE_PROMPT_GRACE_SECONDS` | `30` | Initial grace period after session start before nudging |
-| `DISCORD_VOICE_LIVE_IDLE_PROMPT_TEXT` | (built-in) | The nudge prompt injected after idle timeout |
-
-## SFX library
-
-See `sfx-library.md` for full list. Highlights:
+## Sidecar control API
 
 | Var | Default | Description |
 |---|---|---|
-| `DISCORD_VOICE_LIVE_SFX_ENABLED` | `true` | Master enable |
-| `DISCORD_VOICE_LIVE_SFX_DIR` | `~/.hermes/voice-users/sfx/` | Default sfx directory |
-| `DISCORD_VOICE_LIVE_SFX_<SLOT>` | per-slot | Per-slot WAV path override |
-| `DISCORD_VOICE_LIVE_SFX_<SLOT>_VOLUME` | per-slot | Per-slot volume (0.0-1.5) |
+| `DISCORD_VOICE_LIVE_PORT` | `18943` | Local HTTP sidecar port on `127.0.0.1`. |
+| `DISCORD_VOICE_LIVE_SECRET_FILE` | `~/.hermes/voice-live-control-secret` | File used to persist the `X-API-Secret` for mutating sidecar routes. |
+| `DISCORD_VOICE_LIVE_NOTIFY_TIMEOUT` | `5` | Timeout for notification-side HTTP/control operations. |
 
-Slots: `TOOL_INIT`, `ERROR`, `NOTIFICATION`, `TRANSITION`.
+Read-only routes are `/health` and `/notes`. Mutating routes `/stop`, `/say`, `/frame`, and `/notify` require `X-API-Secret`.
 
-## Typing sfx (legacy single-slot)
-
-| Var | Default | Description |
-|---|---|---|
-| `DISCORD_VOICE_LIVE_TYPING_SOUND` | `true` | Enable the keyboard click sfx on tool calls |
-| `DISCORD_VOICE_LIVE_TYPING_SFX` | `~/.hermes/voice-live-typing.wav` | Path to the WAV |
-| `DISCORD_VOICE_LIVE_TYPING_SFX_VOLUME` | `0.35` | Volume |
-| `DISCORD_VOICE_LIVE_TYPING_SYNTH_FALLBACK` | `false` | If true and the WAV is missing, generate a synthetic click instead of going silent |
-
-## Video
+## Discord voice session
 
 | Var | Default | Description |
 |---|---|---|
-  - `DISCORD_VOICE_LIVE_VIDEO_MAX_FPS` | `1` | Hard cap on feeder frame rate. Gemini rejects faster anyway. |
-  - `DISCORD_VOICE_LIVE_VIDEO_MAX_BYTES` | `524288` | Per-frame JPEG size cap (512 KB). |
-  - `DISCORD_VOICE_LIVE_VIDEO_WHEN_RECENT_AUDIO_SECONDS` | `8` | Drop frames if no voice activity in the last N seconds. |
-  - `DISCORD_VOICE_LIVE_VIDEO_INITIALIZED_QUIET_THRESHOLD_S` | `30` | Webhook announce fires only when a frame is accepted after at least this many seconds of silence. |
-  - `DISCORD_VOICE_LIVE_VIDEO_ENABLED` | `true` | Allow video frame input |
-  - `DISCORD_VOICE_LIVE_VIDEO_STATE_DETECTION` | `true` | Auto-react to video enable/disable |
-  - `DISCORD_VOICE_LIVE_VIDEO_STATE_POLL_INTERVAL_SECONDS` | `2.0` | Poll interval for video state changes |
+| `DISCORD_VOICE_LIVE_ALLOWED_SPEAKERS` | empty | Comma-separated user IDs accepted by the sink. Empty = allow all non-bot users in the voice channel. |
+| `DISCORD_VOICE_LIVE_LEAVE_PHRASES` | built-in phrase list | Spoken phrases that request the bridge to leave, such as `leave voice`, `disconnect`, `hang up`, `bye`. |
+| `DISCORD_VOICE_LIVE_AUTO_LEAVE_QUIET_SECONDS` | `900` | Fallback auto-leave timeout after quiet audio, if idle prompt flow is disabled or not active. |
+| `DISCORD_VOICE_LIVE_AUTO_LEAVE_MIN_UPTIME_SECONDS` | `120` | Minimum session uptime before idle prompt / auto-leave can fire. |
+| `DISCORD_VOICE_LIVE_IDLE_PROMPT_SECONDS` | `120` | Seconds of inactivity before the bridge prompts the user. |
+| `DISCORD_VOICE_LIVE_IDLE_PROMPT_GRACE_SECONDS` | `60` | Seconds after the idle prompt before hangup if no activity returns. |
+| `DISCORD_VOICE_LIVE_IDLE_PROMPT_TEXT` | `You alive, or am I hanging up?` | Text sent into Gemini for the idle prompt. |
 
-## Tool enable/disable
-
-| Var | Default | Description |
-|---|---|---|
-| `DISCORD_VOICE_LIVE_LOCAL_TOOLS` | `true` | All local tools (umbrella) |
-| `DISCORD_VOICE_LIVE_WEB_TOOLS` | `true` | Web search / extract |
-| `DISCORD_VOICE_LIVE_SPOTIFY_TOOLS` | `true` | Spotify playback |
-| `DISCORD_VOICE_LIVE_GITHUB_TOOLS` | `true` | GitHub repo / issue / PR tools |
-| `DISCORD_VOICE_LIVE_HA_TOOLS` | `true` | Home Assistant |
-| `DISCORD_VOICE_LIVE_OPENCODE_TOOLS` | `true` | Opencode delegation |
-| `DISCORD_VOICE_LIVE_SYSINSPECT_TOOLS` | `true` | System inspection |
-| `DISCORD_VOICE_LIVE_EMAIL_TOOLS` | `true` | Email read / send / reply / brief |
-
-## Webhooks
-
-See `webhooks.md`. One env var per event class, all start with `DISCORD_VOICE_LIVE_WEBHOOK_<CLASS>`.
+## Audio timing / interruption
 
 | Var | Default | Description |
 |---|---|---|
-| `DISCORD_VOICE_LIVE_WEBHOOK_THROTTLE_SECONDS` | `60` | Default throttle window when `throttle_key` is set |
+| `GEMINI_AUDIO_STREAM_IDLE_END_SECONDS` | `0.25` | Seconds after last audio chunk before sending `realtimeInput.audioStreamEnd`. |
+| `DISCORD_VOICE_LIVE_OUTPUT_PREROLL_MS` | `320` | Silence inserted before the first Gemini output audio chunk of a turn. |
+| `DISCORD_VOICE_LIVE_OUTPUT_FADE_IN_MS` | `0` | Fade-in duration applied to the first chunk of a model turn. |
+| `DISCORD_VOICE_LIVE_OUTPUT_READ_WAIT_SECONDS` | `0.005` | How long `LiveAudioSource.read()` waits for queued audio before returning silence. |
+| `DISCORD_VOICE_LIVE_OUTPUT_TAIL_PAD_MS` | `240` | Silence inserted at the end of a completed output turn. |
+| `DISCORD_VOICE_LIVE_CLEAR_ON_INTERRUPT` | `true` | Clear queued Discord output when the user interrupts locally or Gemini sends `interrupted`. |
 
-## Email brief
-
-See `email-brief.md`.
-
-| Var | Default | Description |
-|---|---|---|
-| `DISCORD_VOICE_LIVE_EMAIL_BRIEF_ENABLED` | `true` | Enable the scheduler |
-| `DISCORD_VOICE_LIVE_EMAIL_BRIEF_INTERVAL_SECONDS` | `1800` | 30 min default |
-| `DISCORD_VOICE_LIVE_EMAIL_BRIEF_LIMIT` | `8` | Max emails per brief |
-
-## Per-email reminder loop
+## Video / frame feeder
 
 | Var | Default | Description |
 |---|---|---|
-| `DISCORD_VOICE_LIVE_EMAIL_REMINDER_ENABLED` | `true` | Enable per-email pings |
-| `DISCORD_VOICE_LIVE_EMAIL_REMINDER_POLL_SECONDS` | `120` | 2 min poll interval |
-| `DISCORD_VOICE_LIVE_EMAIL_REMINDER_MAX_PER_HOUR` | `3` | Cap pings per hour to avoid spam |
+| `DISCORD_VOICE_LIVE_VIDEO_ENABLED` | `true` | Enables `/frame` and queued video input to Gemini. |
+| `DISCORD_VOICE_LIVE_VIDEO_MAX_FPS` | `1` | Max accepted frame rate. The code clamps this to 1 fps. |
+| `DISCORD_VOICE_LIVE_VIDEO_MAX_BYTES` | `524288` | Max accepted image payload size, 512 KiB by default. |
+| `DISCORD_VOICE_LIVE_VIDEO_WHEN_RECENT_AUDIO_SECONDS` | `8` | Drop non-forced frames if no recent voice activity occurred within this window. |
+| `DISCORD_VOICE_LIVE_VIDEO_INITIALIZED_QUIET_THRESHOLD_S` | `30` | Webhook threshold for announcing video reinitialization after quiet time. |
+| `DISCORD_VOICE_LIVE_VIDEO_STATE_DETECTION` | `true` | Enable video state polling from the plugin layer. |
+| `DISCORD_VOICE_LIVE_VIDEO_STATE_POLL_INTERVAL` | `5` | Poll interval for video state detection. Note: current code uses this name, not `_SECONDS`. |
 
-## Notification system
-
-| Var | Default | Description |
-|---|---|---|
-| `DISCORD_VOICE_LIVE_NOTIFY_TIMEOUT` | `10` | HTTP timeout for webhook delivery (s) |
-
-## Honcho integration
+## SFX / typing indicator
 
 | Var | Default | Description |
 |---|---|---|
-| `VOICE_LIVE_HONCHO_CONTEXT` | `true` | Inject Honcho context into the system prompt |
-| `VOICE_LIVE_HONCHO_MAX_CHARS` | `1200` | Cap Honcho context block size |
-| `VOICE_LIVE_HONCHO_PEER` | (user_id) | Override the Honcho peer name |
+| `DISCORD_VOICE_LIVE_SFX_ENABLED` | `true` | Master SFX enable in the SFX module. |
+| `DISCORD_VOICE_LIVE_SFX_DIR` | `~/.hermes/voice-users/sfx/` | Directory for slot-based SFX files. |
+| `DISCORD_VOICE_LIVE_SFX_<SLOT>` | per-slot | Override WAV path for a slot. Slots include `TOOL_INIT`, `ERROR`, `NOTIFICATION`, `TRANSITION`. |
+| `DISCORD_VOICE_LIVE_SFX_<SLOT>_VOLUME` | per-slot | Per-slot volume. |
+| `DISCORD_VOICE_LIVE_TYPING_SOUND` | `true` | Enable typing/click sound during tool calls. |
+| `DISCORD_VOICE_LIVE_TYPING_SFX` | empty | Optional WAV path for typing sound. |
+| `DISCORD_VOICE_LIVE_TYPING_SFX_VOLUME` | `0.35` | Typing sound volume. |
+| `DISCORD_VOICE_LIVE_TYPING_SYNTH_FALLBACK` | `false` | Generate synthetic clicks if the WAV is missing. |
 
-## Opencode delegation
-
-| Var | Default | Description |
-|---|---|---|
-| `OPENCODE_BIN` | `~/.local/bin/opencode` | Path to opencode binary |
-| `OPENCODE_DEFAULT_MODEL` | (opencode default) | Model passed to opencode |
-| `OPENCODE_TMUX_SESSION` | `voice-opencode` | Tmux session name |
-| `DISCORD_VOICE_LIVE_OPENCODE_WATCHER` | `true` | Watch opencode tmux sessions for status changes |
-| `DISCORD_VOICE_LIVE_OPENCODE_WATCHER_POLL_SECONDS` | `2.0` | Poll interval |
-| `DISCORD_VOICE_LIVE_OPENCODE_WATCHER_INITIAL_DELAY_SECONDS` | `5` | Delay before first poll after session start |
-| `DISCORD_VOICE_LIVE_OPENCODE_WATCHER_MIN_VOICE_GAP_SECONDS` | `10` | Minimum gap between narrations to avoid spam |
-
-## Misc
+## Notes / transcripts
 
 | Var | Default | Description |
 |---|---|---|
-| `VOICE_USERS_DIR` | `~/.hermes/voice-users/` | Per-user profile directory |
-| `VOICE_OWNER_DISCORD_ID` | (env) | Used for owner-only commands |
-| `HERMES_PYTHON` | `python3` | Python interpreter for subprocess calls |
-| `GOOGLE_API_BIN` | (auto-detected) | Path to `google_api.py` for email + Google Workspace |
-| `HASS_URL` | `http://homeassistant.local:8123` | Home Assistant base URL |
-| `HASS_TOKEN` | — | Home Assistant long-lived access token |
+| `DISCORD_VOICE_LIVE_NOTES_DIR` | `~/.hermes/voice-live-notes/` | JSONL transcript/note event directory used by `/notes`. |
+
+## Autostart
+
+| Var | Default | Description |
+|---|---|---|
+| `DISCORD_VOICE_LIVE_AUTOSTART` | `false` | If true, schedule autostart after the gateway/adapter is ready. |
+| `DISCORD_VOICE_LIVE_AUTOSTART_FILE` | `~/.hermes/voice-live-autostart.json` | JSON file used for autostart parameters. |
+| `DISCORD_VOICE_LIVE_GUILD_ID` | empty | Guild ID used for autostart if channel inference is not possible. |
+| `DISCORD_VOICE_LIVE_CHANNEL_ID` | empty | Voice channel ID used for autostart if inference is not possible. |
+| `DISCORD_VOICE_LIVE_KEEP_AUTOSTART_FILE` | `true` | Keep the autostart file after successful start. |
+
+## Tool gates
+
+| Var | Default | Description |
+|---|---|---|
+| `DISCORD_VOICE_LIVE_LOCAL_TOOLS` | `true` | Umbrella gate for local bridge tools. |
+| `DISCORD_VOICE_LIVE_WEB_TOOLS` | `true` | Web search/extract tools. |
+| `DISCORD_VOICE_LIVE_SPOTIFY_TOOLS` | `true` | Spotify voice tools. |
+| `DISCORD_VOICE_LIVE_GITHUB_TOOLS` | `true` | GitHub tools. |
+| `DISCORD_VOICE_LIVE_HA_TOOLS` | `true`, but requires `HASS_TOKEN` | Home Assistant tools. Disabled automatically if `HASS_TOKEN` is empty. |
+| `DISCORD_VOICE_LIVE_OPENCODE_TOOLS` | `true` | OpenCode/delegation tools. |
+| `DISCORD_VOICE_LIVE_SYSINSPECT_TOOLS` | `true` | Read-only allowlisted system inspection tools. |
+| `DISCORD_VOICE_LIVE_EMAIL_TOOLS` | `true` | Email read/send/reply/brief tools where backend is configured. |
+
+## Email reminders / briefs
+
+| Var | Default | Description |
+|---|---|---|
+| `DISCORD_VOICE_LIVE_EMAIL_REMINDER_ENABLED` | `true` | Enable per-email reminder loop. |
+| `DISCORD_VOICE_LIVE_EMAIL_REMINDER_POLL_SECONDS` | `300` | Poll interval for unread inbox checks. |
+| `DISCORD_VOICE_LIVE_EMAIL_REMINDER_MAX_PER_HOUR` | `3` | Reminder cap per rolling hour. |
+| `DISCORD_VOICE_LIVE_EMAIL_BRIEF_ENABLED` | `true` | Enable scheduled email brief. |
+| `DISCORD_VOICE_LIVE_EMAIL_BRIEF_INTERVAL_SECONDS` | `1800` | Email brief interval. |
+| `DISCORD_VOICE_LIVE_EMAIL_BRIEF_LIMIT` | `8` | Max emails per brief. |
+
+## Honcho / profile context
+
+| Var | Default | Description |
+|---|---|---|
+| `VOICE_LIVE_HONCHO_CONTEXT` | `true` | Inject Honcho context into the system prompt. |
+| `VOICE_LIVE_HONCHO_MAX_CHARS` | `1200` | Max Honcho context characters. |
+| `VOICE_LIVE_HONCHO_PEER` | `HONCHO_PEER_NAME`, then user ID, then `user` | Override peer name used for memory context. |
+| `VOICE_USERS_DIR` | `~/.hermes/voice-users/` | Per-user profile directory. |
+| `VOICE_OWNER_DISCORD_ID` | env only | Owner ID used by owner-only commands. |
+
+## External integrations
+
+| Var | Default | Description |
+|---|---|---|
+| `GOOGLE_API_BIN` | auto-detected | Path to `google_api.py` used for Google Workspace/email helpers. |
+| `HASS_URL` | `http://homeassistant.local:8123` | Home Assistant base URL. |
+| `HASS_TOKEN` | — | Home Assistant long-lived access token. Required for HA tools. |
+| `OPENCODE_BIN` | `~/.local/bin/opencode` | Path to OpenCode binary. |
+| `OPENCODE_DEFAULT_MODEL` | OpenCode default | Model passed to OpenCode. |
+| `OPENCODE_TMUX_SESSION` | `voice-opencode` | tmux session name for delegated OpenCode work. |

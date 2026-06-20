@@ -27,11 +27,23 @@ For now: **Gemini bridge = current Discord/Gemini runtime. SORA bridge = migrati
 | Runtime | In-process Hermes plugin named `discord-voice` |
 | Plugin metadata | `plugin.yaml` reports version `0.3.5` |
 | Discord commands | `/voice-live` and `/voice-live-leave` via Hermes |
-| Hermes tools | `voice_live`, `voice_live_leave` |
+| Hermes tools | `voice_live`, `voice_live_leave`, `voice_live_status`, `voice_live_frame`, `voice_live_video_status`, `voice_live_notes` |
 | Gemini model default | `gemini-3.1-flash-live-preview`, with fallback list via env |
+| Gemini voice default | `Kore` |
 | Audio path | Discord 48 kHz stereo PCM → 16 kHz mono Gemini input → 24 kHz mono Gemini output → Discord 48 kHz stereo |
 | Sidecar API | Local HTTP, default `127.0.0.1:18943`, configurable with `DISCORD_VOICE_LIVE_PORT` |
-| Static docs site | Kept in `docs-site/`, but it is an older VOPI/static snapshot and may lag behind code |
+| Sidecar auth | `/health` and `/notes` are read-only; `/stop`, `/say`, `/frame`, `/notify` require `X-API-Secret` |
+| Static docs site | Kept in `docs-site/`, but it is a static snapshot and may lag behind the markdown docs/code |
+
+---
+
+## Gemini Live implementation notes
+
+The bridge uses the Gemini Live WebSocket endpoint directly instead of the GenAI SDK. The setup payload, audio format, VAD/interruption behavior, frame input, tool-call handling, reconnect behavior, and sidecar API are documented here:
+
+**[`docs/gemini-live-implementation.md`](docs/gemini-live-implementation.md)**
+
+That page is the current best explanation of how `bridge.py` maps Discord voice to Gemini Live.
 
 ---
 
@@ -51,7 +63,7 @@ cd gemini-live-discord-bridge
 # 3. Restart Hermes gateway
 systemctl --user restart hermes-gateway
 
-# 4. From Discord, run:
+# 4. From Discord, join a voice channel and run:
 /voice-live
 /voice-live-leave
 ```
@@ -75,7 +87,7 @@ DISCORD_BOT_TOKEN=***
 GEMINI_API_KEY=***        # GOOGLE_API_KEY also works in code
 ```
 
-Common optional settings:
+Strongly recommended:
 
 ```bash
 DISCORD_VOICE_LIVE_USER_ID=123456789012345678
@@ -88,7 +100,7 @@ VOICE_LIVE_HONCHO_CONTEXT=true
 VOICE_LIVE_HONCHO_MAX_CHARS=1200
 ```
 
-See `docs/env-vars.md` for the older full list, but verify critical values against `bridge.py` and `plugin.yaml` until docs are regenerated.
+Full code-grounded env reference: [`docs/env-vars.md`](docs/env-vars.md).
 
 ---
 
@@ -96,15 +108,17 @@ See `docs/env-vars.md` for the older full list, but verify critical values again
 
 | Feature | Current implementation |
 |---|---|
-| Full-duplex Discord voice | Receives Discord audio, streams PCM to Gemini Live, plays Gemini audio back into Discord |
-| Gemini Live WebSocket | Uses Google Gemini Multimodal Live `BidiGenerateContent` WSS |
-| Audio conversion | Discord 48 kHz stereo ↔ Gemini 16 kHz input / 24 kHz output |
-| Video frames | Accepts still/video frames through the local sidecar and forwards them to Gemini |
-| Tool calling | Handles local, web, Spotify, GitHub, Home Assistant, email, inspection, and delegation-style tools when configured |
+| Full-duplex Discord voice | Receives decoded Discord audio, streams PCM to Gemini Live, plays Gemini audio back into Discord |
+| Gemini Live WebSocket | Uses Google Gemini Live `BidiGenerateContent` WSS directly |
+| Audio conversion | Discord 48 kHz stereo input → Gemini 16 kHz mono input; Gemini 24 kHz mono output → Discord 48 kHz stereo playback |
+| Barge-in | Uses Gemini `START_OF_ACTIVITY_INTERRUPTS` plus a local fast output-clear path on speech energy |
+| First-turn mute | Sends empty `audioStreamEnd` after `setupComplete`; deployment should set `DISCORD_VOICE_LIVE_GREETING=` if it wants zero greeting output |
+| Video frames | Accepts JPEG/PNG/WebP through `/frame` and forwards them as Gemini realtime video input |
+| Tool calling | Handles local, web, Spotify, GitHub, Home Assistant, email, inspection, onboarding, and delegation-style tools when configured |
 | Honcho context | Optional per-user context injection into the system prompt |
 | Proactive notification path | Local notification dispatcher and `/notify` sidecar route |
-| Notes/transcripts | JSONL-style note events under the Hermes voice notes directory |
-| Idle handling | Idle prompts and auto-leave behavior are env-driven |
+| Notes/transcripts | JSONL-style note events under `~/.hermes/voice-live-notes/` by default |
+| Idle handling | Idle prompts, grace hangup, and fallback auto-leave are env-driven |
 
 ---
 
@@ -116,35 +130,34 @@ Default bind:
 http://127.0.0.1:18943
 ```
 
-Common routes used by the bridge/docs:
-
-| Route | Method | Purpose |
+| Route | Auth | Purpose |
 |---|---|---|
-| `/health` | GET | Bridge health and metrics |
-| `/frame` | POST | Submit a JPEG/PNG frame for Gemini vision |
-| `/say` | GET/POST depending on caller path | Inject text into the live bridge |
-| `/notes` | GET | Read recent note/transcript events |
-| `/notify` | GET/POST | Send a proactive notification payload |
-| `/stop` | GET/POST depending on handler path | Stop the active bridge |
+| `/health` | none | Bridge health and metrics |
+| `/notes?limit=N` | none | Recent transcript/note events |
+| `/frame` | `X-API-Secret` | Submit a JPEG/PNG/WebP frame for Gemini vision |
+| `/say?text=...` | `X-API-Secret` | Inject text into the live bridge |
+| `/notify` | `X-API-Secret` | Send a proactive notification payload |
+| `/stop` | `X-API-Secret` | Stop the active bridge |
 
-The port is controlled by `DISCORD_VOICE_LIVE_PORT`.
+Secret file default:
+
+```bash
+DISCORD_VOICE_LIVE_SECRET_FILE=~/.hermes/voice-live-control-secret
+```
 
 ---
 
-## Documentation status
+## Documentation map
 
-The old docs are still useful as background, but they are **not guaranteed to match the current code exactly**:
+Current markdown docs:
 
-- [`docs-site/index.html`](docs-site/index.html) is a static site snapshot.
-- [`docs/`](docs/) contains the source markdown used by that site.
-- `bridge.py`, `plugin.yaml`, `install.sh`, and `requirements.txt` are the current source of truth.
+- [`docs/gemini-live-implementation.md`](docs/gemini-live-implementation.md) — Gemini Live setup/audio/video/tools/reconnect details.
+- [`docs/architecture.md`](docs/architecture.md) — architecture and lifecycle.
+- [`docs/env-vars.md`](docs/env-vars.md) — code-grounded env var defaults.
+- [`docs/quickstart.md`](docs/quickstart.md) — install and first session.
+- [`docs/troubleshooting.md`](docs/troubleshooting.md) — operational failure modes.
 
-Known drift to fix in a later docs pass:
-
-- version labels differ between README, docs site, and `plugin.yaml`;
-- some website copy still markets the VOPI build as the main release state;
-- route names and env defaults need to be rechecked against the current code;
-- SORA transition status was missing from the old README.
+`docs-site/` is a static site snapshot. Treat the markdown docs and code as more current until the static site is regenerated.
 
 ---
 
