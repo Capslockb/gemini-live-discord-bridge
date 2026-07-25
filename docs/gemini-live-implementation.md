@@ -1,6 +1,6 @@
 # Gemini Live implementation notes
 
-This page documents how this repository currently talks to Gemini Live. It is based on `bridge.py`, `__init__.py`, and the current Google Live API docs checked on 2026-06-20.
+This page documents how this repository currently talks to Gemini Live. It is based on `bridge_core.py`, `bridge_audio.py`, `bridge_http.py`, `bridge_config.py`, `bridge_decls.py`, `bridge_tools.py`, and `__init__.py`, plus the Google Live API documentation checked on 2026-06-20.
 
 Official references:
 
@@ -20,7 +20,7 @@ Discord voice channel
   -> Discord AudioSource playback
 ```
 
-It is not a browser WebRTC client. The Discord bot stays inside the Hermes gateway process, and the bridge runs as an in-process async task plus a local HTTP sidecar.
+It is not a browser WebRTC client. The Discord bot stays inside the Hermes gateway process. Bridge lifecycle and model coordination run in `bridge_core.py`, audio receive/playback lives in `bridge_audio.py`, and the local HTTP sidecar lives in `bridge_http.py`.
 
 ## Gemini Live protocol shape
 
@@ -36,7 +36,7 @@ This repo uses raw WebSockets instead of the GenAI SDK so the bridge can stay cl
 
 ## Setup payload used by the code
 
-`GeminiLiveBridge._connect_model()` builds a setup payload with these important fields:
+`bridge_core.GeminiLiveBridge._connect_model()` builds a setup payload with these important fields:
 
 - `model`: sent as `models/<selected-model>`.
 - `generationConfig.responseModalities`: `AUDIO` only.
@@ -70,7 +70,7 @@ If setup fails for a candidate, the WebSocket is closed and the next model is tr
 
 ## Audio input path
 
-`GeminiPCMSink` receives decoded Discord PCM from `discord-ext-voice-recv` because `wants_opus()` returns `False`.
+`bridge_audio.GeminiPCMSink` receives decoded Discord PCM from `discord-ext-voice-recv` because `wants_opus()` returns `False`.
 
 The expected Discord-side input is:
 
@@ -103,7 +103,7 @@ The bridge:
 1. base64-decodes the PCM chunk;
 2. optionally adds pre-roll silence when a model turn opens;
 3. optionally fades in the chunk;
-4. feeds 24 kHz mono PCM into `LiveAudioSource`;
+4. feeds 24 kHz mono PCM into `bridge_audio.LiveAudioSource`;
 5. upsamples to Discord's 48 kHz stereo PCM in `LiveAudioSource.read()`;
 6. lets Discord encode/play the source into the voice channel.
 
@@ -135,13 +135,13 @@ During normal input, the send loop tracks the last audio chunk time. If no audio
 
 Google documents `audioStreamEnd` as the marker that the audio stream ended while automatic activity detection is enabled. The client can reopen the stream by sending more audio.
 
-After `setupComplete`, `VoiceLiveBridge.start()` also sends an immediate empty `audioStreamEnd` to suppress unwanted first-turn generation.
+After `setupComplete`, `bridge_core.VoiceLiveBridge.start()` also sends an immediate empty `audioStreamEnd` to suppress unwanted first-turn generation.
 
 Caveat: the code default for `DISCORD_VOICE_LIVE_GREETING` is currently `I'm here.`. If you want a silent connection, set it empty in the environment.
 
 ## Video / frame input
 
-The bridge accepts JPEG, PNG, and WebP frames through `feed_video_frame()` and the sidecar `/frame` route.
+The bridge accepts JPEG, PNG, and WebP frames through `bridge_core.GeminiLiveBridge.feed_video_frame()` and the `bridge_http.py` sidecar `/frame` route.
 
 Important limits:
 
@@ -162,7 +162,7 @@ Accepted frames are queued as:
 
 ## Tool calls
 
-The server can send `toolCall` messages containing `functionCalls`. The bridge executes the matching local handler and returns `toolResponse` messages with matching IDs.
+The server can send `toolCall` messages containing `functionCalls`. Declarations are assembled from `bridge_decls.py`; execution is dispatched through `bridge_tools.py`; matching `toolResponse` messages are returned with the original call IDs.
 
 Tool groups currently include Spotify, web, local utilities, Home Assistant, OpenCode/delegation, system inspection, GitHub, email, email brief, and onboarding/profile tools.
 
@@ -190,16 +190,16 @@ The bridge starts a localhost sidecar on:
 127.0.0.1:${DISCORD_VOICE_LIVE_PORT:-18943}
 ```
 
-Routes:
+Routes on current `main`:
 
-| Route | Auth | Purpose |
+| Route | Intended auth | Current status |
 |---|---|---|
-| `/health` | none | Read bridge health/metrics |
-| `/notes?limit=N` | none | Read transcript/note events |
-| `/stop` | `X-API-Secret` | Stop active bridge |
-| `/say?text=...` | `X-API-Secret` | Push realtime text to Gemini |
-| `/frame` | `X-API-Secret` | POST an image frame |
-| `/notify` | `X-API-Secret` | Deliver proactive notification payload |
+| `/health` | none | Available for local health/metrics checks |
+| `/notes?limit=N` | none | Available, but exposes transcript/note events and the notes-file path to any local caller |
+| `/stop` | `X-API-Secret` | **Blocked by Issue #5:** the auth path raises before it can return a controlled response |
+| `/say?text=...` | `X-API-Secret` | **Blocked by Issue #5** |
+| `/frame` | `X-API-Secret` | **Blocked by Issue #5** |
+| `/notify` | `X-API-Secret` | **Blocked by Issue #5** |
 
 The secret is generated in `__init__.py` and persisted by default at:
 
@@ -207,15 +207,17 @@ The secret is generated in `__init__.py` and persisted by default at:
 DISCORD_VOICE_LIVE_SECRET_FILE=~/.hermes/voice-live-control-secret
 ```
 
-Read-only routes are intentionally unauthenticated so local health checks and notes can be inspected. Mutating routes require `X-API-Secret`.
+The code intends to leave `/health` and `/notes` anonymous and protect mutating routes with `X-API-Secret`, but that policy is not currently operational for the mutating routes. Keep the sidecar bound to loopback, do not proxy or browser-expose it, and treat `/notes` as transcript-sensitive until the authentication and Host/Origin findings in Issues #4 and #5 are resolved.
 
 ## Documentation footguns fixed by this page
 
 Older docs claimed or implied a few things that no longer match code:
 
+- the modular implementation now lives primarily in `bridge_core.py`, `bridge_audio.py`, `bridge_http.py`, `bridge_decls.py`, and `bridge_tools.py`; `bridge.py` is a compatibility facade;
 - default voice is `Kore`, not `en-US-JennyNeural`;
 - `DISCORD_VOICE_LIVE_USER_ID` is strongly recommended for slash inference/user-presence, but not strictly required for raw tool calls with explicit guild/channel;
 - `KEEP_AUTOSTART_FILE` defaults true in code;
-- mutating sidecar routes require `X-API-Secret`;
+- mutating sidecar routes are currently unavailable on `main` because their intended authentication path is blocked by Issue #5;
+- `/notes` is unauthenticated and returns persisted transcript/note data, so loopback binding is a required interim boundary;
 - `voice_live_status`, `voice_live_frame`, `voice_live_video_status`, and `voice_live_notes` exist as Hermes tools, not just `voice_live` and `voice_live_leave`;
 - session resumption is only partial plumbing right now.
