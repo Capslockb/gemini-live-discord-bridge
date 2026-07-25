@@ -79,9 +79,11 @@ You should see values like:
 
 After you speak, `audio_in_chunks` and transcript-related counters should begin increasing if transcription is working.
 
-## Manual image frame test
+## Manual image frame test — currently blocked
 
-Mutating sidecar routes require the control secret:
+Current `main` cannot complete the mutating-route authentication comparison: requests to `/frame`, `/say`, `/notify`, and `/stop` fail before the intended authorization result is returned. Do not use these routes while [Issue #5](https://github.com/Capslockb/gemini-live-discord-bridge/issues/5) remains open.
+
+After the authentication fix is merged and validated on its exact head, the intended frame-test procedure is:
 
 ```bash
 SECRET=$(cat ~/.hermes/voice-live-control-secret)
@@ -104,7 +106,8 @@ Look for `video_in_frames`, `video_sent_frames`, `video_dropped_frames`, and `vi
 
 - **Bridge seems slow to start** — let one connect cycle finish. Restarting the gateway repeatedly can make Discord voice/CDN retries worse.
 - **No `/voice-live` target channel found** — join a Discord voice channel first and set `DISCORD_VOICE_LIVE_USER_ID` to your Discord snowflake.
-- **Health works but `/frame`, `/say`, `/notify`, `/stop` return 401** — add `X-API-Secret` from `~/.hermes/voice-live-control-secret`.
+- **`/frame`, `/say`, `/notify`, or `/stop` fail on current `main`** — this is the known authentication blocker in Issue #5, not evidence that the supplied secret is merely wrong.
+- **Need recent transcript notes** — `/notes` is currently unauthenticated and exposes recent transcript/note events; keep the sidecar loopback-only and do not proxy it while [Issue #4](https://github.com/Capslockb/gemini-live-discord-bridge/issues/4) remains open.
 - **Unexpected greeting** — set `DISCORD_VOICE_LIVE_GREETING=` if you want no text injected after setup.
 - **No inbound audio** — verify `discord-ext-voice-recv` installed, `receiving_active=true`, and the user is not filtered by `DISCORD_VOICE_LIVE_ALLOWED_SPEAKERS`.
 
