@@ -34,6 +34,7 @@ Use this source-of-truth order when files disagree:
 - `/stop`, `/say`, `/frame`, and `/notify` are intended to require `X-API-Secret`, but the current `main` auth path is blocked by [Issue #5](https://github.com/Capslockb/gemini-live-discord-bridge/issues/5). Treat those routes as unavailable until the repair is merged and validated.
 - `/notes` is currently anonymous and returns recent stored note/transcript events. Keep the sidecar loopback-only and review [Issue #4](https://github.com/Capslockb/gemini-live-discord-bridge/issues/4) before exposing it through any proxy, browser-accessible route, or tunnel.
 - The bridge does not create conventional audio recordings, but note/transcript events are persisted under `~/.hermes/voice-live-notes/` by default unless configuration changes that location or behavior.
+- Email briefs can currently mask total backend failure as an empty inbox, advance de-duplication after failed delivery, and report `notified: true` without successful delivery. The scheduler also has recipient-routing and model-visible snippet privacy blockers. Keep scheduled briefs disabled unless the destination and data boundary are explicitly verified, and see [Issue #10](https://github.com/Capslockb/gemini-live-discord-bridge/issues/10).
 
 ## Quick reference
 
