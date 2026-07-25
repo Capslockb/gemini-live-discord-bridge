@@ -49,23 +49,20 @@ If the sidecar returns:
 
 then the HTTP server is reachable but no active bridge object is registered.
 
-## Mutating sidecar routes return `401 unauthorized`
+## Mutating sidecar routes are blocked on current `main`
 
-`/health` and `/notes` are read-only and unauthenticated. These routes require `X-API-Secret`:
+Current `main` cannot complete authentication for `/stop`, `/say`, `/frame`, or `/notify`: the comparison path raises before returning the intended `401` or route-specific response. Do not use these routes while [Issue #5](https://github.com/Capslockb/gemini-live-discord-bridge/issues/5) remains open.
 
-- `/stop`
-- `/say`
-- `/frame`
-- `/notify`
-
-Use:
+After the authentication fix is merged and validated on its exact head, the intended request pattern is:
 
 ```bash
 SECRET=$(cat ~/.hermes/voice-live-control-secret)
 curl -s -H "X-API-Secret: $SECRET" "http://127.0.0.1:18943/say?text=ping"
 ```
 
-If the secret file is missing, check `DISCORD_VOICE_LIVE_SECRET_FILE` and gateway logs for control-secret initialization warnings.
+If the secret file is missing after that fix, check `DISCORD_VOICE_LIVE_SECRET_FILE` and gateway logs for control-secret initialization warnings.
+
+`/health` remains anonymous. `/notes` is also currently unauthenticated and returns transcript events plus the backing notes-file path; keep the sidecar bound to loopback and do not proxy or browser-expose it while [Issue #4](https://github.com/Capslockb/gemini-live-discord-bridge/issues/4) remains open.
 
 ## Gemini setup fails for all models
 
@@ -145,7 +142,9 @@ If interruptions are still slow, inspect health for `local_interrupt_events` and
 
 ## `/frame` drops images
 
-Check:
+The `/frame` route is currently blocked by the authentication defect tracked in Issue #5, so a failed manual request on current `main` is not reliable evidence about frame filtering.
+
+After the authentication fix is merged and validated, check:
 
 ```bash
 curl -s http://127.0.0.1:18943/health | python3 -m json.tool | grep video
@@ -161,7 +160,7 @@ Common drop reasons:
 | `fps_limit` | More than 1 fps by default |
 | `no_recent_voice` | Frame was not forced and no recent voice activity occurred |
 
-Manual forced frame test:
+Intended manual forced-frame test after the auth fix:
 
 ```bash
 SECRET=$(cat ~/.hermes/voice-live-control-secret)
@@ -226,6 +225,6 @@ The code default for `DISCORD_VOICE_LIVE_KEEP_AUTOSTART_FILE` is `true`.
 
 - Gateway: `journalctl --user -u hermes-gateway -f`
 - Hermes logs: `~/.hermes/logs/`
-- Bridge notes/transcripts: `~/.hermes/voice-live-notes/` by default
+- Bridge notes/transcripts: `~/.hermes/voice-live-notes/` by default; treat these as private conversation data
 - SFX files: `~/.hermes/voice-users/sfx/`
 - Control secret: `~/.hermes/voice-live-control-secret` by default
