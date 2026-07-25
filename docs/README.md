@@ -1,23 +1,39 @@
-# docs/ — discord-voice plugin documentation
+# docs/ — Gemini Discord voice bridge documentation
 
-The plugin is a Discord voice bridge backed by the Gemini Multimodal Live API. Beyond basic voice I/O it ships a personality system, a fallback chain for multi-CLI delegation, a proactive notification system, an email brief scheduler, and a slot-based UI sfx library.
+This directory documents the current Hermes `discord-voice` plugin and its Gemini Multimodal Live runtime.
+
+Use this source-of-truth order when files disagree:
+
+1. Current runtime code on `main`.
+2. `README.md` and the Markdown files in `docs/`.
+3. `docs-site/`, which is a generated static snapshot and may lag behind the code and Markdown documentation.
 
 ## Index
 
 | Doc | What it covers |
 |---|---|
-| [`architecture.md`](architecture.md) | End-to-end audio path, threading model, lifecycle |
-| [`personality.md`](personality.md) | System prompt shape, ping-pong rhythm, boredom switch, vocal expression |
-| [`fallback-chain.md`](fallback-chain.md) | Multi-CLI delegation health registry, `execute_with_fallback`, `local_delegate_health` |
-| [`notification.md`](notification.md) | `local_notify` / `local_notify_schedule` / `POST /notify` / AFK pings |
-| [`email-brief.md`](email-brief.md) | `local_email_brief` tool, scheduler, important/fyi/auto buckets |
-| [`sfx-library.md`](sfx-library.md) | Slot-based sfx library, `local_sfx_test`, env vars, adding your own clips |
-| [`sfx-credits.md`](sfx-credits.md) | YouTube source provenance, license, processing recipe |
-| [`webhooks.md`](webhooks.md) | Event classes, emit helpers, env-var configuration |
-| [`video.md`](video.md) | `/frame` HTTP endpoint, video-state detection, feeder |
-| [`env-vars.md`](env-vars.md) | Every `DISCORD_VOICE_LIVE_*` env var, defaults, descriptions |
-| [`troubleshooting.md`](troubleshooting.md) | Common bridge failures, the Discord CDN handshake quirk, log locations |
-| [`changelog.md`](changelog.md) | Release history (full changelog is `../CHANGELOG.md`) |
+| [`gemini-live-implementation.md`](gemini-live-implementation.md) | Gemini Live setup, audio, video, tools, interruption, and reconnect behavior |
+| [`architecture.md`](architecture.md) | End-to-end architecture, threading, sidecar, and lifecycle |
+| [`quickstart.md`](quickstart.md) | Installation and first-session setup |
+| [`env-vars.md`](env-vars.md) | Runtime environment variables and defaults |
+| [`troubleshooting.md`](troubleshooting.md) | Operational failure modes and diagnostics |
+| [`personality.md`](personality.md) | System-prompt and conversational behavior |
+| [`fallback-chain.md`](fallback-chain.md) | Multi-CLI delegation and fallback health handling |
+| [`notification.md`](notification.md) | Local notifications, scheduled notifications, and `/notify` |
+| [`email-brief.md`](email-brief.md) | Email brief tool and scheduler |
+| [`sfx-library.md`](sfx-library.md) | Slot-based sound-effect library and configuration |
+| [`sfx-credits.md`](sfx-credits.md) | Sound-effect provenance and rights notes |
+| [`webhooks.md`](webhooks.md) | Event classes, emit helpers, and webhook configuration |
+| [`video.md`](video.md) | Frame input, video state, and feeder behavior |
+| [`changelog.md`](changelog.md) | Documentation changelog; the repository changelog is `../CHANGELOG.md` |
+
+## Current security and data-handling status
+
+- The sidecar binds to `127.0.0.1:18943` by default and is not a public HTTP service.
+- `/health` is anonymous and read-only.
+- `/stop`, `/say`, `/frame`, and `/notify` are intended to require `X-API-Secret`, but the current `main` auth path is blocked by [Issue #5](https://github.com/Capslockb/gemini-live-discord-bridge/issues/5). Treat those routes as unavailable until the repair is merged and validated.
+- `/notes` is currently anonymous and returns recent stored note/transcript events. Keep the sidecar loopback-only and review [Issue #4](https://github.com/Capslockb/gemini-live-discord-bridge/issues/4) before exposing it through any proxy, browser-accessible route, or tunnel.
+- The bridge does not create conventional audio recordings, but note/transcript events are persisted under `~/.hermes/voice-live-notes/` by default unless configuration changes that location or behavior.
 
 ## Quick reference
 
@@ -28,27 +44,22 @@ The plugin is a Discord voice bridge backed by the Gemini Multimodal Live API. B
 # Uninstall
 ./install.sh --uninstall
 
-# Check bridge health
+# Check anonymous bridge health
 curl -s http://127.0.0.1:18943/health | jq
 
-# Restart gateway to pick up plugin changes
+# Restart the Hermes gateway after plugin changes
 systemctl --user restart hermes-gateway
 journalctl --user -u hermes-gateway -f
 
 # Use from Discord
-/voice-live              # join your voice channel
-/voice-live-leave        # leave
-
-# Sidecar control API
-curl "http://127.0.0.1:18943/say?text=hello+from+sidecar"
-curl -X POST -F "image=@frame.jpg" "http://127.0.0.1:18943/frame?force=true"
-curl -X POST -H "Content-Type: application/json" -d '{"text":"inbox is huge","mode":"dm"}' "http://127.0.0.1:18943/notify"
+/voice-live
+/voice-live-leave
 ```
 
-## What this plugin does NOT do
+Do not copy older unauthenticated examples for `/say`, `/frame`, `/notify`, or `/stop`. After Issue #5 is resolved, clients must send the configured `X-API-Secret`; until then, those routes remain blocked on current `main`.
 
-- It does not record calls or persist transcripts to long-term storage (notes are ephemeral unless `DISCORD_VOICE_LIVE_NOTES_DIR` is set, and even then, only manual notes)
-- It does not run a separate HTTP server for production traffic — the sidecar on 18943 is for `__init__.py` handlers and the optional `video-frame-feeder.py`, not public use
-- It does not implement auth — it relies on the Hermes gateway's existing Discord user/role permissions
+## Scope boundaries
 
-For the "why" of design decisions, see `../AGENTS.md` and the per-file docstrings.
+- The sidecar is local control infrastructure, not a production web API.
+- The repository is still the working Gemini Discord runtime while broader orchestration migrates toward `Capslockb/sora-agent`; SORA does not yet replace every live Discord/Gemini path documented here.
+- Generated pages in `docs-site/` should be regenerated only after their source Markdown and generator behavior have been reviewed against the current code.
