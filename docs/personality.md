@@ -1,6 +1,6 @@
 # Personality — system prompt, ping-pong rhythm, boredom switch
 
-The system prompt lives in `bridge.py:BASE_SYSTEM_PROMPT` and is prepended to every Gemini Live session. It is **not** a documentation file — it's a set of behavioral contracts the model is told to follow.
+The source of truth for the system prompt is `bridge_config.py:BASE_SYSTEM_PROMPT`. The compatibility facade in `bridge.py` re-exports that constant for existing imports. The prompt is **not** a documentation file — it is a set of behavioral contracts the model is told to follow.
 
 ## Sections of the prompt (in order)
 
@@ -37,9 +37,9 @@ Each section addresses a specific regression observed in earlier sessions. The m
 
 ## How to edit the prompt
 
-The prompt is a single Python string concatenation. Edit `BASE_SYSTEM_PROMPT` in `bridge.py` (around line 162-177). After editing:
+Edit `BASE_SYSTEM_PROMPT` in `bridge_config.py`. Do not edit only the `bridge.py` facade; it contains compatibility imports, not the prompt definition. After editing:
 
-1. Compile-check: `python -m py_compile bridge.py`
+1. Compile-check both the source module and facade: `python -m py_compile bridge_config.py bridge.py`
 2. Restart the gateway: `systemctl --user restart hermes-gateway`
 3. Test by joining voice and triggering the relevant behavior
 
@@ -53,4 +53,4 @@ The static prompt is appended with a per-session "Honcho context" block fetched 
 - Honcho's representation of B's peer card
 - Capped at `HONCHO_CONTEXT_MAX_CHARS` (default 1200)
 
-The Honcho block is **dynamic** — it varies per session — but the BASE_SYSTEM_PROMPT is **static** and identical across users. Per-user customization goes through Honcho, not the prompt.
+The Honcho block is **dynamic** — it varies per session — but the `BASE_SYSTEM_PROMPT` is **static** and identical across users. Per-user customization goes through Honcho, not the prompt.
