@@ -189,17 +189,20 @@ The code currently logs cancellations but does not attempt rollback. If a tool a
 
 For risky future tools, prefer idempotent actions, dry-run defaults, or explicit confirmation before side effects.
 
-## Email brief returns `no backend`
+## Email brief backend failures can look like an empty inbox
 
-Both configured email backends failed or are unavailable.
+Current `email_brief.fetch()` returns an empty list with backend `none` after both Google and Himalaya fail. `build_brief()` then currently turns that into `status: "ok"` and the same “Your inbox is empty” text used for a successful backend that found no mail. There is no reliable `no backend` result to troubleshoot on current `main`.
 
-Check:
+Until [Issue #10](https://github.com/Capslockb/gemini-live-discord-bridge/issues/10) is fixed, do not treat an empty brief as proof that the inbox or either backend is healthy. Keep scheduled briefs disabled unless the recipient and privacy boundary have been explicitly verified.
+
+Check the backends independently in a trusted shell:
 
 ```bash
 python ~/.hermes/hermes-agent/skills/productivity/google-workspace/scripts/google_api.py auth
+himalaya --quiet -o json envelope list --page-size 1
 ```
 
-Also check any `himalaya` configuration if that backend is expected.
+A backend command failing or being unavailable is consistent with the false-empty result described above. Avoid copying real sender, subject, snippet, recipient, or credential data into issue reports or logs.
 
 ## Home Assistant tools do not appear
 
