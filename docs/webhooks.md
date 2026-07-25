@@ -20,6 +20,8 @@ Each event class has its own env var (a comma-separated list of Discord webhook 
 
 Setting a webhook URL = opt in. Empty env = no fanout for that class.
 
+`voice.transcript` sends conversation text to every configured Discord webhook. Treat webhook URLs as secrets, configure only destinations that are authorized to receive private voice-session content, and avoid enabling transcript fanout by default.
+
 ## Embed shape
 
 Each webhook fires a Discord embed with a consistent shape:
@@ -69,4 +71,6 @@ All return the number of webhooks the event was delivered to (0 if no subscriber
 
 ## Notes file
 
-Independent of webhooks, the plugin writes call notes to `~/.hermes/voice-live-notes/` (configurable via `DISCORD_VOICE_LIVE_NOTES_DIR`). Each note is a JSONL line with timestamp, speaker, text, and metadata. The `/notes` sidecar endpoint reads them back for replay or summarization.
+Independent of webhooks, the plugin writes call notes to `~/.hermes/voice-live-notes/` (configurable via `DISCORD_VOICE_LIVE_NOTES_DIR`). Each note is a JSONL line with timestamp, speaker, text, and metadata. Treat these files as private conversation data and secure their filesystem permissions and backups.
+
+The `/notes` sidecar endpoint reads these records back for replay or summarization. It is currently unauthenticated and returns transcript events plus the backing file path, so keep the sidecar bound to loopback and do not proxy or browser-expose it while [Issue #4](https://github.com/Capslockb/gemini-live-discord-bridge/issues/4) remains open.
