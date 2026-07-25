@@ -33,6 +33,7 @@ For now: **Gemini bridge = current Discord/Gemini runtime. SORA bridge = migrati
 | Audio path | Discord 48 kHz stereo PCM → 16 kHz mono Gemini input → 24 kHz mono Gemini output → Discord 48 kHz stereo |
 | Sidecar API | Local HTTP, default `127.0.0.1:18943`, configurable with `DISCORD_VOICE_LIVE_PORT` |
 | Sidecar auth | **Known high-severity blocker:** current `main` raises `NameError` in the mutating-route auth comparison. Treat `/stop`, `/say`, `/frame`, and `/notify` as unavailable until [Issue #5](https://github.com/Capslockb/gemini-live-discord-bridge/issues/5) is fixed and tested. |
+| Video delivery | The `/frame` route, external feeder, and `voice_live_frame` client are not end-to-end operational. Startup, secret-file, and missing-auth-header defects are tracked in [Issue #9](https://github.com/Capslockb/gemini-live-discord-bridge/issues/9). |
 | Transcript exposure | `/notes` is currently unauthenticated and returns recent transcript/note events. Keep the sidecar strictly loopback-only and review [Issue #4](https://github.com/Capslockb/gemini-live-discord-bridge/issues/4) before exposing it through any proxy or browser-accessible path. |
 | Static docs site | Kept in `docs-site/`, but it is a static snapshot and may lag behind the markdown docs/code |
 
@@ -44,7 +45,7 @@ The bridge uses the Gemini Live WebSocket endpoint directly instead of the GenAI
 
 **[`docs/gemini-live-implementation.md`](docs/gemini-live-implementation.md)**
 
-That page is the current best explanation of how `bridge.py` maps Discord voice to Gemini Live.
+That page is the current best explanation of how the modular `bridge_core.py`, `bridge_audio.py`, `bridge_http.py`, and related modules map Discord voice to Gemini Live. `bridge.py` is a compatibility facade.
 
 ---
 
@@ -114,10 +115,10 @@ Full code-grounded env reference: [`docs/env-vars.md`](docs/env-vars.md).
 | Audio conversion | Discord 48 kHz stereo input → Gemini 16 kHz mono input; Gemini 24 kHz mono output → Discord 48 kHz stereo playback |
 | Barge-in | Uses Gemini `START_OF_ACTIVITY_INTERRUPTS` plus a local fast output-clear path on speech energy |
 | First-turn mute | Sends empty `audioStreamEnd` after `setupComplete`; deployment should set `DISCORD_VOICE_LIVE_GREETING=` if it wants zero greeting output |
-| Video frames | Accepts JPEG/PNG/WebP through `/frame` and forwards them as Gemini realtime video input |
+| Video frames | `/frame`, the external feeder, and `voice_live_frame` are present but blocked on current `main`; see [Issue #9](https://github.com/Capslockb/gemini-live-discord-bridge/issues/9) and [`docs/video.md`](docs/video.md). |
 | Tool calling | Handles local, web, Spotify, GitHub, Home Assistant, email, inspection, onboarding, and delegation-style tools when configured |
 | Honcho context | Optional per-user context injection into the system prompt |
-| Proactive notification path | Local notification dispatcher and `/notify` sidecar route |
+| Proactive notification path | Local notification dispatcher and `/notify` sidecar route; authenticated sidecar delivery remains blocked by [Issue #5](https://github.com/Capslockb/gemini-live-discord-bridge/issues/5). |
 | Notes/transcripts | JSONL-style note events under `~/.hermes/voice-live-notes/` by default |
 | Idle handling | Idle prompts, grace hangup, and fallback auto-leave are env-driven |
 
@@ -137,7 +138,7 @@ http://127.0.0.1:18943
 |---|---|---|
 | `/health` | none | Bridge health and metrics |
 | `/notes?limit=N` | none | Recent transcript/note events |
-| `/frame` | `X-API-Secret` | Submit a JPEG/PNG/WebP frame for Gemini vision |
+| `/frame` | `X-API-Secret` | Submit a JPEG/PNG/WebP frame for Gemini vision; current clients are also blocked by Issue #9. |
 | `/say?text=...` | `X-API-Secret` | Inject text into the live bridge |
 | `/notify` | `X-API-Secret` | Send a proactive notification payload |
 | `/stop` | `X-API-Secret` | Stop the active bridge |
@@ -159,6 +160,7 @@ Current markdown docs:
 - [`docs/env-vars.md`](docs/env-vars.md) — code-grounded env var defaults.
 - [`docs/quickstart.md`](docs/quickstart.md) — install and first session.
 - [`docs/troubleshooting.md`](docs/troubleshooting.md) — operational failure modes.
+- [`docs/video.md`](docs/video.md) — current frame-feeder and `/frame` status.
 
 `docs-site/` is a static site snapshot. Treat the markdown docs and code as more current until the static site is regenerated.
 
