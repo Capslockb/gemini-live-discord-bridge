@@ -9,18 +9,20 @@ Install the current Gemini Live Discord voice bridge into Hermes and start one l
 git clone https://github.com/Capslockb/gemini-live-discord-bridge.git
 cd gemini-live-discord-bridge
 
-# 2. Install — prompts for DISCORD_BOT_TOKEN and GEMINI_API_KEY
+# 2. Fresh remote install — prompts for DISCORD_BOT_TOKEN and GEMINI_API_KEY
 ./install.sh
 
-# Development install from current working tree
+# Development install from this exact working tree
 ./install.sh --from-local
 
-# Non-interactive install using existing env
+# Skip credential prompts only; required values must already exist
 ./install.sh --no-prompt
 
 # 3. Restart the gateway so the plugin loads
 systemctl --user restart hermes-gateway
 ```
+
+A plain `./install.sh` clones into `~/.hermes/plugins/discord-voice` only when that path does not already exist. On an existing installation it prints `skipping clone` and continues against the existing tree without fetching or checking its revision, so it is **not an update command**. Use `--from-local` when you need the exact current checkout. `--no-prompt` only bypasses the prompts; it does not verify that the required credentials exist before reporting installation completion. See [Issue #11](https://github.com/Capslockb/gemini-live-discord-bridge/issues/11).
 
 ## Minimum env
 
