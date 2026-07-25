@@ -57,9 +57,9 @@ git clone https://github.com/Capslockb/gemini-live-discord-bridge.git
 cd gemini-live-discord-bridge
 
 # 2. Install into Hermes
-./install.sh                 # full install, prompts for env
-./install.sh --from-local    # symlink current working copy for development
-./install.sh --no-prompt     # use existing env values
+./install.sh                 # fresh remote install; prompts for env
+./install.sh --from-local    # symlink this exact working copy for development
+./install.sh --no-prompt     # skip prompts only; required env is not validated
 ./install.sh --uninstall     # remove plugin install
 
 # 3. Restart Hermes gateway
@@ -77,6 +77,8 @@ The installer expects the Hermes layout at:
 ~/.hermes/plugins/discord-voice
 ~/.hermes/.env
 ```
+
+A plain `./install.sh` clones only when the plugin path does not already exist. On a rerun it leaves the existing tree unchanged, so it is not an update command. Use `--from-local` to install the exact current checkout. `--no-prompt` only bypasses prompts and can still report completion when required credentials are absent. The executable correction is tracked in [Issue #11](https://github.com/Capslockb/gemini-live-discord-bridge/issues/11).
 
 ---
 
