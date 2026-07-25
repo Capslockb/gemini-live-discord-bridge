@@ -5,7 +5,7 @@ The source of truth for the system prompt is `bridge_config.py:BASE_SYSTEM_PROMP
 ## Sections of the prompt (in order)
 
 1. **Identity** — "You are S0RA, the AI companion of Capslockb (he calls you B)."
-2. **Capabilities** — Spotify, web search, Gmail, Home Assistant, video awareness.
+2. **Capabilities** — Spotify, web search, Gmail, Home Assistant, and video awareness when an authenticated frame is actually available. The prompt advertises video capability, but the bundled frame paths are blocked on current `main`; see [Issue #9](https://github.com/Capslockb/gemini-live-discord-bridge/issues/9).
 3. **VIDEO / SCREEN-SHARE guard** — strict conditional: "Only describe video you have actually received in the current turn."
 4. **FIRST-TURN BEHAVIOUR** — "do NOT generate any audio. Wait for the user to speak first."
 5. **PINGPONG RHYTHM** — split into question rounds and development rounds.
@@ -25,8 +25,8 @@ Each section addresses a specific regression observed in earlier sessions. The m
 
 | Section | Regression it fixes |
 |---|---|
-| VIDEO guard | "I see you're sharing your screen" hallucination (criterion #33, #34) |
-| FIRST-TURN | First-turn token burn (criterion #34) |
+| VIDEO guard | Prevents screen-share hallucination; it does not prove that either current frame client delivered an image. |
+| FIRST-TURN | First-turn token burn |
 | PINGPONG | Monologue-style lectures when the question is still fuzzy |
 | FORMAT | "Just laughing and not formatting answers" — emotion replacing substance |
 | CALL-OUT | Hand-waving gets rubber-stamped instead of challenged |
@@ -41,16 +41,20 @@ Edit `BASE_SYSTEM_PROMPT` in `bridge_config.py`. Do not edit only the `bridge.py
 
 1. Compile-check both the source module and facade: `python -m py_compile bridge_config.py bridge.py`
 2. Restart the gateway: `systemctl --user restart hermes-gateway`
-3. Test by joining voice and triggering the relevant behavior
+3. Test by joining voice and triggering the relevant behavior.
+
+For video behavior, prompt text alone is not validation. Do not describe the bundled `/frame` clients as operational until the startup and authentication work in [Issue #9](https://github.com/Capslockb/gemini-live-discord-bridge/issues/9) is fixed and tested.
 
 **Do not** add hedging like "be helpful and harmless" — the model interprets that as permission to revert to assistant defaults.
 
 ## Honcho context injection
 
-The static prompt is appended with a per-session "Honcho context" block fetched from the Honcho memory server (see `HONCHO_CONTEXT_ENABLED` env var). This block contains:
+The static prompt can be appended with a per-session "Honcho context" block. The environment variable is `VOICE_LIVE_HONCHO_CONTEXT` (default `true`); `HONCHO_CONTEXT_ENABLED` is the corresponding Python constant, not an environment-variable name. Context is omitted when the feature is disabled, configuration is unavailable, the selected peer cannot be resolved, or the backend request fails.
 
-- The user's recent session summaries
-- Honcho's representation of B's peer card
-- Capped at `HONCHO_CONTEXT_MAX_CHARS` (default 1200)
+When available, the block contains:
 
-The Honcho block is **dynamic** — it varies per session — but the `BASE_SYSTEM_PROMPT` is **static** and identical across users. Per-user customization goes through Honcho, not the prompt.
+- The selected Honcho peer's representation.
+- Conclusions from that peer's card, rendered as known facts.
+- At most `VOICE_LIVE_HONCHO_MAX_CHARS` characters (default `1200`).
+
+The Honcho block is **dynamic** and may vary by selected peer and session, while `BASE_SYSTEM_PROMPT` is static. Peer selection may be provided per user by the caller; otherwise it falls back through Honcho configuration, `VOICE_LIVE_HONCHO_PEER`, `HONCHO_PEER_NAME`, and the configured Discord user ID.
