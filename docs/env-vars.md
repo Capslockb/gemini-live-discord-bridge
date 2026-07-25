@@ -1,6 +1,6 @@
 # Environment variables
 
-Code-grounded environment variable reference for the current Gemini Discord voice bridge. Defaults are taken from `bridge.py`, `__init__.py`, and the related helper modules.
+Code-grounded environment variable reference for the current Gemini Discord voice bridge. Defaults are taken from `bridge_config.py`, `bridge_core.py`, `bridge_http.py`, `__init__.py`, and the related helper modules.
 
 For protocol details, see [`gemini-live-implementation.md`](gemini-live-implementation.md).
 
@@ -30,7 +30,7 @@ For protocol details, see [`gemini-live-implementation.md`](gemini-live-implemen
 | `DISCORD_VOICE_LIVE_SECRET_FILE` | `~/.hermes/voice-live-control-secret` | File used to persist the `X-API-Secret` for mutating sidecar routes. |
 | `DISCORD_VOICE_LIVE_NOTIFY_TIMEOUT` | `5` | Timeout for notification-side HTTP/control operations. |
 
-Read-only routes are `/health` and `/notes`. Mutating routes `/stop`, `/say`, `/frame`, and `/notify` require `X-API-Secret`.
+The intended policy leaves `/health` and `/notes` anonymous and requires `X-API-Secret` for `/stop`, `/say`, `/frame`, and `/notify`. On current `main`, the mutating-route authentication path is blocked by [Issue #5](https://github.com/Capslockb/gemini-live-discord-bridge/issues/5), so those routes must not be treated as operational until the runtime fix and exact-head validation land. `/notes` can return persisted transcript events and the backing file path without authentication; keep the sidecar loopback-only and do not expose it through a proxy or browser-facing network path while [Issue #4](https://github.com/Capslockb/gemini-live-discord-bridge/issues/4) remains open.
 
 ## Discord voice session
 
