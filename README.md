@@ -32,7 +32,8 @@ For now: **Gemini bridge = current Discord/Gemini runtime. SORA bridge = migrati
 | Gemini voice default | `Kore` |
 | Audio path | Discord 48 kHz stereo PCM → 16 kHz mono Gemini input → 24 kHz mono Gemini output → Discord 48 kHz stereo |
 | Sidecar API | Local HTTP, default `127.0.0.1:18943`, configurable with `DISCORD_VOICE_LIVE_PORT` |
-| Sidecar auth | `/health` and `/notes` are read-only; `/stop`, `/say`, `/frame`, `/notify` require `X-API-Secret` |
+| Sidecar auth | **Known high-severity blocker:** current `main` raises `NameError` in the mutating-route auth comparison. Treat `/stop`, `/say`, `/frame`, and `/notify` as unavailable until [Issue #5](https://github.com/Capslockb/gemini-live-discord-bridge/issues/5) is fixed and tested. |
+| Transcript exposure | `/notes` is currently unauthenticated and returns recent transcript/note events. Keep the sidecar strictly loopback-only and review [Issue #4](https://github.com/Capslockb/gemini-live-discord-bridge/issues/4) before exposing it through any proxy or browser-accessible path. |
 | Static docs site | Kept in `docs-site/`, but it is a static snapshot and may lag behind the markdown docs/code |
 
 ---
@@ -130,7 +131,9 @@ Default bind:
 http://127.0.0.1:18943
 ```
 
-| Route | Auth | Purpose |
+> **Security status:** current `main` has a known auth-path crash in `bridge_http.py`. Requests reaching the secret comparison raise `NameError`, so the mutating routes below must not be treated as operational until [Issue #5](https://github.com/Capslockb/gemini-live-discord-bridge/issues/5) is fixed with exact-head tests. `/notes` is also intentionally unauthenticated in the current code and exposes recent transcript data; do not proxy or otherwise broaden access to the sidecar while [Issue #4](https://github.com/Capslockb/gemini-live-discord-bridge/issues/4) remains open.
+
+| Route | Intended auth | Purpose |
 |---|---|---|
 | `/health` | none | Bridge health and metrics |
 | `/notes?limit=N` | none | Recent transcript/note events |
