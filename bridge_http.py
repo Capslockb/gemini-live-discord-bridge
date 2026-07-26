@@ -274,14 +274,15 @@ def _format_response(status: int, body: str, reason: Optional[str] = None) -> by
             413: "PAYLOAD TOO LARGE",
             500: "INTERNAL SERVER ERROR",
         }.get(status, "ERROR")
-    return (
+    body_bytes = body.encode("utf-8")
+    headers = (
         f"HTTP/1.1 {status} {reason}\r\n"
         f"Content-Type: application/json\r\n"
-        f"Content-Length: {len(body)}\r\n"
+        f"Content-Length: {len(body_bytes)}\r\n"
         f"Connection: close\r\n"
         f"\r\n"
-        f"{body}"
-    ).encode()
+    ).encode("ascii")
+    return headers + body_bytes
 
 
 def _hmac_compare(a: bytes, b: bytes) -> bool:
