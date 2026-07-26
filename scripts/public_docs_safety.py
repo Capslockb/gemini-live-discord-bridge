@@ -10,10 +10,11 @@ import subprocess
 import sys
 from pathlib import Path
 
-DOC_NAMES = {"README.md", "SECURITY.md", "CONTRIBUTING.md", "AGENTS.md"}
+DOC_STEMS = {"README", "SECURITY", "CONTRIBUTING", "AGENTS", "CODE_OF_CONDUCT"}
+SPECIAL_DOC_NAMES = {"CODEOWNERS"}
 DOC_DIR_PARTS = {"docs", "doc", "website", "site", "public", "docs-site"}
 FIXTURE_PARTS = {"tests", "fixtures", "public-docs"}
-DOC_EXTS = {".md", ".mdx", ".rst", ".txt", ".html", ".htm"}
+DOC_EXTS = {".md", ".mdx", ".rst", ".txt", ".html", ".htm", ".adoc", ".asciidoc"}
 EXCLUDE_PARTS = {
     "i18n",
     "CHANGELOG.md",
@@ -125,7 +126,10 @@ def is_public_doc(path: str, include_fixtures: bool = False) -> bool:
         return False
     if include_fixtures and FIXTURE_PARTS <= parts and p.suffix.lower() in DOC_EXTS:
         return True
-    return p.name in DOC_NAMES or (
+    named_doc = p.name in SPECIAL_DOC_NAMES or (
+        p.stem.upper() in DOC_STEMS and p.suffix.lower() in DOC_EXTS
+    )
+    return named_doc or (
         p.suffix.lower() in DOC_EXTS and bool(parts & DOC_DIR_PARTS)
     )
 
@@ -227,33 +231,38 @@ def scan_file(path: str, line_numbers) -> list[tuple[str, int, str, str]]:
 
     selected = {i for i in line_numbers if 1 <= i <= len(lines)}
     findings: set[tuple[str, int, str, str]] = set()
-    single_matches: dict[int, set[tuple[str, str]]] = {}
+    window_matches: dict[tuple[int, int], set[tuple[str, str]]] = {}
 
-    for i in sorted(selected):
-        matches = set(classify_text(lines[i - 1]))
-        single_matches[i] = matches
-        for rule_id, category in matches:
-            findings.add((path, i, rule_id, category))
+    for window_size in (1, 2, 3):
+        starts = set()
+        for i in selected:
+            first_start = max(1, i - window_size + 1)
+            last_start = min(i, len(lines) - window_size + 1)
+            starts.update(range(first_start, last_start + 1))
 
-    pair_starts = set()
-    for i in selected:
-        if i > 1:
-            pair_starts.add(i - 1)
-        if i < len(lines):
-            pair_starts.add(i)
-
-    for start in sorted(pair_starts):
-        end = start + 1
-        selected_in_pair = sorted(selected & {start, end})
-        if not selected_in_pair:
-            continue
-        text = f"{lines[start - 1]} {lines[end - 1]}"
-        for rule_id, category in classify_text(text):
-            if (rule_id, category) in single_matches.get(start, set()):
+        for start in sorted(starts):
+            end = start + window_size - 1
+            selected_in_window = sorted(selected & set(range(start, end + 1)))
+            if not selected_in_window:
                 continue
-            if (rule_id, category) in single_matches.get(end, set()):
-                continue
-            findings.add((path, selected_in_pair[0], rule_id, category))
+
+            text = " ".join(lines[start - 1 : end])
+            matches = set(classify_text(text))
+            window_matches[(start, end)] = matches
+
+            for rule_id, category in matches:
+                seen_in_narrower_window = any(
+                    sub_start >= start
+                    and sub_end <= end
+                    and (sub_start, sub_end) != (start, end)
+                    and (rule_id, category) in sub_matches
+                    for (sub_start, sub_end), sub_matches in window_matches.items()
+                )
+                if seen_in_narrower_window:
+                    continue
+                findings.add(
+                    (path, selected_in_window[0], rule_id, category)
+                )
 
     return sorted(findings, key=lambda item: (item[0], item[1], item[2], item[3]))
 
