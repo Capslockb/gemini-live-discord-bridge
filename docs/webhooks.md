@@ -32,9 +32,9 @@ Each webhook fires a Discord embed with a consistent shape:
   "embeds": [{
     "title": "Bridge stopped",
     "description": "Reason: user requested /voice-live-leave",
-    "color": 0x747F8D,
+    "color": 7634829,
     "fields": [
-      {"name": "user", "value": "1474100257762578597", "inline": true},
+      {"name": "user", "value": "<discord-user-id>", "inline": true},
       {"name": "uptime_s", "value": "342.5", "inline": true}
     ],
     "footer": {"text": "sub_event: bridge_stopped | event_class: bridge.status"},
@@ -42,6 +42,8 @@ Each webhook fires a Discord embed with a consistent shape:
   }]
 }
 ```
+
+The example uses a placeholder identity and valid decimal JSON for the embed color. Do not copy real Discord account IDs, webhook URLs, transcript text, or other deployment-specific identifiers into documentation or public issue reports.
 
 Sub-events get specific embed colors (`_SUB_COLORS` in `webhook_dispatcher.py`).
 
