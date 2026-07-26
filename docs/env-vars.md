@@ -11,7 +11,7 @@ For protocol details, see [`gemini-live-implementation.md`](gemini-live-implemen
 | `DISCORD_BOT_TOKEN` | — | Discord bot token. Required by the Hermes Discord adapter / installer path. |
 | `GEMINI_API_KEY` | — | Gemini API key. Required unless `GOOGLE_API_KEY` is set. |
 | `GOOGLE_API_KEY` | — | Fallback Gemini API key used when `GEMINI_API_KEY` is empty. |
-| `DISCORD_VOICE_LIVE_USER_ID` | empty / deployment-specific fallback | Strongly recommended. Used for slash-command channel inference, target-user presence checks, and default Honcho peer naming. Explicit guild/channel tool calls can still work without it. |
+| `DISCORD_VOICE_LIVE_USER_ID` | repository-embedded deployment fallback | Strongly recommended on current `main`. Used for slash-command channel inference, target-user presence checks, and default Honcho peer naming. The embedded fallback is unsafe for reused or multi-user deployments and is tracked in [Issue #16](https://github.com/Capslockb/gemini-live-discord-bridge/issues/16). Explicit guild/channel tool calls can avoid channel inference, but runtime remediation has not landed. |
 
 ## Gemini Live
 
@@ -128,7 +128,9 @@ The intended policy leaves `/health` and `/notes` anonymous and requires `X-API-
 | `VOICE_LIVE_HONCHO_MAX_CHARS` | `1200` | Max Honcho context characters. |
 | `VOICE_LIVE_HONCHO_PEER` | `HONCHO_PEER_NAME`, then user ID, then `user` | Override peer name used for memory context. |
 | `VOICE_USERS_DIR` | `~/.hermes/voice-users/` | Per-user profile directory. |
-| `VOICE_OWNER_DISCORD_ID` | env only | Owner ID used by owner-only commands. |
+| `VOICE_OWNER_DISCORD_ID` | repository-embedded deployment fallback | Owner ID used to grant owner-only tool capability. Current code persists `is_owner: true` and expands destructive/inspection tool access for a matching profile. The unsafe default and revocation semantics are tracked in [Issue #17](https://github.com/Capslockb/gemini-live-discord-bridge/issues/17). |
+
+`VOICE_OWNER_DISCORD_ID` is authorization state, not display metadata. On current `main`, changing or unsetting it does not demote a profile already stored with `is_owner: true`; the profile YAML remains elevated when reloaded. Treat `~/.hermes/voice-users/*.yaml` as security-sensitive, configure the intended owner explicitly, and review existing owner profiles before reusing the installation. Do not use an empty value as a presumed safe revocation mechanism until Issue #17 is fixed and tested.
 
 ## External integrations
 
