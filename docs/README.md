@@ -27,12 +27,13 @@ Use this source-of-truth order when files disagree:
 | [`video.md`](video.md) | Frame input, video state, and feeder behavior |
 | [`changelog.md`](changelog.md) | Documentation changelog; the repository changelog is `../CHANGELOG.md` |
 
-## Current security, privacy, and rights status
+## Current security, privacy, rights, and protocol status
 
 - The sidecar binds to `127.0.0.1:18943` by default and is not a public HTTP service.
 - `/health` is anonymous and read-only.
 - `/stop`, `/say`, `/frame`, and `/notify` are intended to require `X-API-Secret`, but the current `main` auth path is blocked by [Issue #5](https://github.com/Capslockb/gemini-live-discord-bridge/issues/5). Treat those routes as unavailable until the repair is merged and validated.
 - `/notes` is currently anonymous and returns recent stored note/transcript events. Keep the sidecar loopback-only and review [Issue #4](https://github.com/Capslockb/gemini-live-discord-bridge/issues/4) before exposing it through any proxy, browser-accessible route, or tunnel.
+- Sidecar JSON response framing is not reliable for non-ASCII content: `_format_response()` calculates `Content-Length` from the Python string before UTF-8 encoding. Clients can receive truncated or malformed JSON for transcripts, echoed text, notifications, or errors containing multi-byte characters. Keep diagnostic payloads ASCII-only where practical and see [Issue #13](https://github.com/Capslockb/gemini-live-discord-bridge/issues/13).
 - The bridge does not create conventional audio recordings, but note/transcript events are persisted under `~/.hermes/voice-live-notes/` by default unless configuration changes that location or behavior.
 - Email briefs can currently mask total backend failure as an empty inbox, advance de-duplication after failed delivery, and report `notified: true` without successful delivery. The scheduler also has recipient-routing and model-visible snippet privacy blockers. Keep scheduled briefs disabled unless the destination and data boundary are explicitly verified, and see [Issue #10](https://github.com/Capslockb/gemini-live-discord-bridge/issues/10).
 - The repository includes derived WAV files whose provenance is recorded but whose redistribution permission has not been verified. Use your own explicitly licensed files or set `DISCORD_VOICE_LIVE_SFX_ENABLED=false` while [Issue #12](https://github.com/Capslockb/gemini-live-discord-bridge/issues/12) remains open. The eventual root software license tracked in [Issue #7](https://github.com/Capslockb/gemini-live-discord-bridge/issues/7) must not be treated as granting rights to third-party media.
