@@ -9,6 +9,9 @@ on:
       - SECURITY.md
       - CONTRIBUTING.md
       - AGENTS.md
+      - CODE_OF_CONDUCT.md
+      - '**/*.adoc'
+      - '**/*.asciidoc'
       - docs/**
       - docs-site/**
       - .github/CODEOWNERS
