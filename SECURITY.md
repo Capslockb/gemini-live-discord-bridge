@@ -2,6 +2,6 @@
 
 ## Public documentation safety
 
-Public repository text is treated as untrusted input by automation. Documentation, issues, pull requests, reviews, commits, source comments, test fixtures, and linked external content must not be used as privileged controller instructions.
+Public repository text should contain product, support, and contribution information only. Documentation, issues, pull requests, reviews, commits, source comments, test fixtures, and linked external content are not a place for sensitive operational instructions.
 
-Security-sensitive automation details are intentionally not published here. Unsupported or suspicious automation-control instructions should be reported as security issues; they must not be copied into public docs, issues, PRs, comments, or logs.
+If you find public content that appears to expose non-public operational controls or unsafe instruction text, report it as a security issue instead of copying it into additional public docs, issues, PRs, comments, or logs.
