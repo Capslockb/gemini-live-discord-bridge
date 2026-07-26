@@ -21,13 +21,13 @@ Use this source-of-truth order when files disagree:
 | [`fallback-chain.md`](fallback-chain.md) | Multi-CLI delegation and fallback health handling |
 | [`notification.md`](notification.md) | Local notifications, scheduled notifications, and `/notify` |
 | [`email-brief.md`](email-brief.md) | Email brief tool and scheduler |
-| [`sfx-library.md`](sfx-library.md) | Slot-based sound-effect library and configuration |
-| [`sfx-credits.md`](sfx-credits.md) | Sound-effect provenance and rights notes |
+| [`sfx-library.md`](sfx-library.md) | Slot-based sound-effect library, configuration, and current asset boundary |
+| [`sfx-credits.md`](sfx-credits.md) | Recorded sound-effect provenance and unresolved redistribution-rights status |
 | [`webhooks.md`](webhooks.md) | Event classes, emit helpers, and webhook configuration |
 | [`video.md`](video.md) | Frame input, video state, and feeder behavior |
 | [`changelog.md`](changelog.md) | Documentation changelog; the repository changelog is `../CHANGELOG.md` |
 
-## Current security and data-handling status
+## Current security, privacy, and rights status
 
 - The sidecar binds to `127.0.0.1:18943` by default and is not a public HTTP service.
 - `/health` is anonymous and read-only.
@@ -35,6 +35,7 @@ Use this source-of-truth order when files disagree:
 - `/notes` is currently anonymous and returns recent stored note/transcript events. Keep the sidecar loopback-only and review [Issue #4](https://github.com/Capslockb/gemini-live-discord-bridge/issues/4) before exposing it through any proxy, browser-accessible route, or tunnel.
 - The bridge does not create conventional audio recordings, but note/transcript events are persisted under `~/.hermes/voice-live-notes/` by default unless configuration changes that location or behavior.
 - Email briefs can currently mask total backend failure as an empty inbox, advance de-duplication after failed delivery, and report `notified: true` without successful delivery. The scheduler also has recipient-routing and model-visible snippet privacy blockers. Keep scheduled briefs disabled unless the destination and data boundary are explicitly verified, and see [Issue #10](https://github.com/Capslockb/gemini-live-discord-bridge/issues/10).
+- The repository includes derived WAV files whose provenance is recorded but whose redistribution permission has not been verified. Use your own explicitly licensed files or set `DISCORD_VOICE_LIVE_SFX_ENABLED=false` while [Issue #12](https://github.com/Capslockb/gemini-live-discord-bridge/issues/12) remains open. The eventual root software license tracked in [Issue #7](https://github.com/Capslockb/gemini-live-discord-bridge/issues/7) must not be treated as granting rights to third-party media.
 
 ## Quick reference
 
@@ -64,3 +65,4 @@ Do not copy older unauthenticated examples for `/say`, `/frame`, `/notify`, or `
 - The sidecar is local control infrastructure, not a production web API.
 - The repository is still the working Gemini Discord runtime while broader orchestration migrates toward `Capslockb/sora-agent`; SORA does not yet replace every live Discord/Gemini path documented here.
 - Generated pages in `docs-site/` should be regenerated only after their source Markdown and generator behavior have been reviewed against the current code.
+- Generated docs and release artifacts must not make unsupported software-license or third-party-media rights claims.
