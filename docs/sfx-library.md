@@ -25,6 +25,8 @@ Default runtime directory: `~/.hermes/voice-users/sfx/`
 └── transition.wav
 ```
 
+On current `main`, this default is **not** derived from `HERMES_HOME`. `install.sh` stages SFX under `$HOME/.hermes/voice-users/sfx`, while `sfx.py` independently uses the same home-relative default unless `DISCORD_VOICE_LIVE_SFX_DIR` is set. A custom `HERMES_HOME` therefore relocates the plugin, environment file, virtual environment, and feeder, but not the SFX directory. For a custom Hermes root, set `DISCORD_VOICE_LIVE_SFX_DIR="$HERMES_HOME/voice-users/sfx"` for runtime and place approved WAV files there explicitly; the current installer does not honor that override when copying bundled files. Path unification and migration behavior are tracked in [Issue #18](https://github.com/Capslockb/gemini-live-discord-bridge/issues/18).
+
 The repository also contains files under `sfx/`, and `install.sh` copies a bundled file into the runtime directory only when the corresponding destination file is missing. The current redistribution rights for those bundled files are not verified; see [`sfx-credits.md`](sfx-credits.md) and [Issue #12](https://github.com/Capslockb/gemini-live-discord-bridge/issues/12). Use your own explicitly licensed files or disable SFX until that issue is resolved.
 
 Files do not need to arrive in the target playback format. The loader accepts supported WAV inputs and converts them to 24 kHz mono PCM16. Supplying that format directly avoids the simple in-process resampling path.
@@ -57,11 +59,13 @@ DISCORD_VOICE_LIVE_SFX_ENABLED=true    # default
 
 Set this to `false` to prevent bundled or locally configured SFX from loading or playing.
 
-Global SFX directory, overriding `~/.hermes/voice-users/sfx/`:
+Global runtime SFX directory, overriding `~/.hermes/voice-users/sfx/`:
 
 ```bash
 DISCORD_VOICE_LIVE_SFX_DIR=/custom/sfx/dir
 ```
+
+This override is read by `sfx.py`; current `install.sh` still copies bundled files to `$HOME/.hermes/voice-users/sfx`. Do not assume an installer run populated the overridden directory.
 
 ## `local_sfx_test` tool
 
