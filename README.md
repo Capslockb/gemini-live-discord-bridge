@@ -60,7 +60,7 @@ cd gemini-live-discord-bridge
 # 2. Install into Hermes
 ./install.sh                 # fresh remote install; prompts for env
 ./install.sh --from-local    # symlink this exact working copy for development
-./install.sh --no-prompt     # skip prompts only; required env is not validated
+./install.sh --no-prompt     # skip prompts; required credentials must exist
 ./install.sh --uninstall     # remove plugin install
 
 # 3. Restart Hermes gateway
@@ -81,7 +81,7 @@ ${HERMES_HOME:-$HOME/.hermes}/.env
 
 Current exception: `install.sh` still copies bundled SFX to `$HOME/.hermes/voice-users/sfx`, even when `HERMES_HOME` points elsewhere. For a custom root, set `DISCORD_VOICE_LIVE_SFX_DIR` and populate that directory explicitly. The executable path unification is tracked in [Issue #18](https://github.com/Capslockb/gemini-live-discord-bridge/issues/18).
 
-A plain `./install.sh` clones only when the plugin path does not already exist. On a rerun it leaves the existing tree unchanged, so it is not an update command. Use `--from-local` to install the exact current checkout. `--no-prompt` only bypasses prompts and can still report completion when required credentials are absent. The executable correction is tracked in [Issue #11](https://github.com/Capslockb/gemini-live-discord-bridge/issues/11).
+A plain `./install.sh` is a fresh-install command, not an updater. If the plugin path already exists, it refuses to continue, reports the path type, and reports the Git revision plus clean/modified worktree state when available. It never fetches, resets, deletes, or overwrites the existing installation. `--from-local` preserves a symlink already targeting the current checkout and refuses conflicting paths. `--no-prompt` validates non-empty `DISCORD_BOT_TOKEN` and either `GEMINI_API_KEY` or `GOOGLE_API_KEY` before installation mutation. See [Issue #11](https://github.com/Capslockb/gemini-live-discord-bridge/issues/11).
 
 ---
 
