@@ -71,13 +71,15 @@ systemctl --user restart hermes-gateway
 /voice-live-leave
 ```
 
-The installer expects the Hermes layout at:
+The installer derives its main paths from `${HERMES_HOME:-$HOME/.hermes}`:
 
 ```text
-~/.hermes/hermes-agent/venv/bin/python
-~/.hermes/plugins/discord-voice
-~/.hermes/.env
+${HERMES_HOME:-$HOME/.hermes}/hermes-agent/venv/bin/python
+${HERMES_HOME:-$HOME/.hermes}/plugins/discord-voice
+${HERMES_HOME:-$HOME/.hermes}/.env
 ```
+
+Current exception: `install.sh` still copies bundled SFX to `$HOME/.hermes/voice-users/sfx`, even when `HERMES_HOME` points elsewhere. For a custom root, set `DISCORD_VOICE_LIVE_SFX_DIR` and populate that directory explicitly. The executable path unification is tracked in [Issue #18](https://github.com/Capslockb/gemini-live-discord-bridge/issues/18).
 
 A plain `./install.sh` clones only when the plugin path does not already exist. On a rerun it leaves the existing tree unchanged, so it is not an update command. Use `--from-local` to install the exact current checkout. `--no-prompt` only bypasses prompts and can still report completion when required credentials are absent. The executable correction is tracked in [Issue #11](https://github.com/Capslockb/gemini-live-discord-bridge/issues/11).
 
@@ -206,4 +208,4 @@ Do not run multiple competing Gemini/SORA voice plugins against the same Discord
 
 ## License
 
-This repository does not currently contain a canonical `LICENSE` file. Do not assume MIT or other reuse rights from older generated documentation. The owner decision and follow-up work are tracked in [Issue #7](https://github.com/Capslockb/gemini-live-discord-bridge/issues/7).
+This repository does not currently contain a canonical `LICENSE` file. Do not assume MIT or other reuse rights from older generated documentation. The owner decision and follow-up work are tracked in [Issue #7](https://github.com/Capslockb/gemini-live-discord-bridge/issues/7].
