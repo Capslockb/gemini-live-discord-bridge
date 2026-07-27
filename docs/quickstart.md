@@ -97,3 +97,27 @@ curl -s \
   --data-binary @frame.jpg \
   "http://127.0.0.1:18943/frame?force=true&source=manual" | python3 -m json.tool
 ```
+
+Then check:
+
+```bash
+curl -s http://127.0.0.1:18943/health | python3 -m json.tool
+```
+
+Look for `video_in_frames`, `video_sent_frames`, `video_dropped_frames`, and `video_last_reason`.
+
+## Common pitfalls
+
+- **Bridge seems slow to start** — let one connect cycle finish. Restarting the gateway repeatedly can make Discord voice/CDN retries worse.
+- **No `/voice-live` target channel found** — join a Discord voice channel first and set `DISCORD_VOICE_LIVE_USER_ID` to your Discord snowflake.
+- **`/frame`, `/say`, `/notify`, or `/stop` fail on current `main`** — this is the known authentication blocker in Issue #5, not evidence that the supplied secret is merely wrong.
+- **Need recent transcript notes** — `/notes` is currently unauthenticated and exposes recent transcript/note events; keep the sidecar loopback-only and do not proxy it while [Issue #4](https://github.com/Capslockb/gemini-live-discord-bridge/issues/4) remains open.
+- **Unexpected greeting** — set `DISCORD_VOICE_LIVE_GREETING=` if you want no text injected after setup.
+- **No inbound audio** — verify `discord-ext-voice-recv` installed, `receiving_active=true`, and the user is not filtered by `DISCORD_VOICE_LIVE_ALLOWED_SPEAKERS`.
+
+## Next
+
+- [`gemini-live-implementation.md`](gemini-live-implementation.md) — exact Gemini Live setup/audio/video/tool behavior.
+- [`architecture.md`](architecture.md) — bridge lifecycle and runtime objects.
+- [`env-vars.md`](env-vars.md) — current env defaults.
+- [`troubleshooting.md`](troubleshooting.md) — operational failures and fixes.
