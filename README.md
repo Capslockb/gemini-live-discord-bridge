@@ -188,12 +188,14 @@ Until step 4 is complete, do not assume `sora-agent` fully replaces this repo fo
 ## Development notes
 
 ```bash
+HERMES_ROOT="${HERMES_HOME:-$HOME/.hermes}"
+
 # Compile-check plugin files through the Hermes venv
-~/.hermes/hermes-agent/venv/bin/python -m py_compile *.py
+"$HERMES_ROOT/hermes-agent/venv/bin/python" -m py_compile *.py
 
 # Run installed regression tests if present
-cd ~/.hermes/plugins/discord-voice
-~/.hermes/hermes-agent/venv/bin/python -m unittest tests.test_interrupt_latency tests.test_transcript_latency -v
+cd "$HERMES_ROOT/plugins/discord-voice"
+"$HERMES_ROOT/hermes-agent/venv/bin/python" -m unittest tests.test_interrupt_latency tests.test_transcript_latency -v
 ```
 
 Do not run multiple competing Gemini/SORA voice plugins against the same Discord bot/channel unless you are intentionally testing conflicts.
