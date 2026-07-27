@@ -94,10 +94,17 @@ DISCORD_BOT_TOKEN=***
 GEMINI_API_KEY=***        # GOOGLE_API_KEY also works in code
 ```
 
-Strongly recommended:
+Required for safe `/voice-live` and `/voice-live-leave` channel inference on current `main`:
 
 ```bash
 DISCORD_VOICE_LIVE_USER_ID=123456789012345678
+```
+
+Without that setting, the runtime falls back to a repository-embedded Discord account. Tool callers can avoid user inference only by supplying both `guild_id` and `channel_id`. The fail-closed runtime correction is tracked in [Issue #16](https://github.com/Capslockb/gemini-live-discord-bridge/issues/16).
+
+Common optional settings:
+
+```bash
 DISCORD_VOICE_LIVE_ALLOWED_SPEAKERS=123456789012345678,987654321098765432
 DISCORD_VOICE_LIVE_PORT=18943
 DISCORD_VOICE_LIVE_VOICE=Kore
