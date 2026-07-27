@@ -26,9 +26,17 @@ class InstallerContractTests(unittest.TestCase):
         python_bin.parent.mkdir(parents=True)
         python_bin.write_text(
             "#!/usr/bin/env bash\n"
-            'printf "python" >> "$FAKE_COMMAND_LOG"\n'
+            'printf "python cwd=%q" "$PWD" >> "$FAKE_COMMAND_LOG"\n'
             'printf " %q" "$@" >> "$FAKE_COMMAND_LOG"\n'
             'printf "\\n" >> "$FAKE_COMMAND_LOG"\n'
+            'if [ "${1:-}" = "-m" ] && [ "${2:-}" = "unittest" ] && [ -n "${EXPECTED_TEST_CWD:-}" ]; then\n'
+            '  actual=$(readlink -f "$PWD" 2>/dev/null || printf "%s" "$PWD")\n'
+            '  expected=$(readlink -f "$EXPECTED_TEST_CWD" 2>/dev/null || printf "%s" "$EXPECTED_TEST_CWD")\n'
+            '  if [ "$actual" != "$expected" ]; then\n'
+            '    echo "unexpected unittest cwd: $PWD" >&2\n'
+            '    exit 42\n'
+            '  fi\n'
+            'fi\n'
             'if [ "${1:-}" = "-c" ]; then printf "generated-test-secret\\n"; fi\n'
             "exit 0\n",
             encoding="utf-8",
@@ -84,6 +92,7 @@ class InstallerContractTests(unittest.TestCase):
                 "PATH": f"{self.fake_bin}:/usr/bin:/bin",
                 "FAKE_COMMAND_LOG": str(self.log),
                 "FAKE_REPO_TEMPLATE": str(self.template),
+                "EXPECTED_TEST_CWD": str(self.install_dir),
             }
         )
         for key in ("DISCORD_BOT_TOKEN", "GEMINI_API_KEY", "GOOGLE_API_KEY"):
@@ -131,7 +140,9 @@ class InstallerContractTests(unittest.TestCase):
         self.assertIn(f"Source revision:     {REVISION}", result.stdout)
         self.assertIn("Regression tests:    passed", result.stdout)
         self.assertIn("Runtime credentials: incomplete", result.stdout)
-        self.assertIn("git clone", self.log.read_text(encoding="utf-8"))
+        command_log = self.log.read_text(encoding="utf-8")
+        self.assertIn("git clone", command_log)
+        self.assertIn("python cwd=", command_log)
 
     def test_existing_clean_install_is_refused_without_mutation(self):
         self.populate_existing(dirty=False)
@@ -151,6 +162,33 @@ class InstallerContractTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("worktree: modified", result.stdout)
         self.assertTrue((self.install_dir / ".dirty").exists())
+
+    def test_existing_symlink_reports_target_revision_and_worktree(self):
+        source = self.root / "existing-source"
+        shutil.copytree(self.template, source)
+        (source / ".git").mkdir()
+        self.install_dir.parent.mkdir(parents=True)
+        self.install_dir.symlink_to(source, target_is_directory=True)
+
+        result = self.run_installer()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("existing symlink (refused)", result.stdout)
+        self.assertIn(f"target: {source}", result.stdout)
+        self.assertIn(f"revision: {REVISION}", result.stdout)
+        self.assertIn("worktree: clean", result.stdout)
+        self.assertFalse(self.log.read_text(encoding="utf-8").find("python -m pip") >= 0)
+
+    def test_existing_regular_file_is_classified_without_mutation(self):
+        self.install_dir.parent.mkdir(parents=True)
+        self.install_dir.write_text("preserve\n", encoding="utf-8")
+
+        result = self.run_installer()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("existing file (refused)", result.stdout)
+        self.assertIn("revision: not-applicable", result.stdout)
+        self.assertEqual(self.install_dir.read_text(encoding="utf-8"), "preserve\n")
 
     def test_existing_rerun_reports_disposition_before_no_prompt_credentials(self):
         self.populate_existing(dirty=False)
@@ -195,6 +233,35 @@ class InstallerContractTests(unittest.TestCase):
         self.assertIn("GEMINI_API_KEY or GOOGLE_API_KEY", result.stdout)
         self.assertFalse((self.hermes / "plugins").exists())
         self.assertFalse(self.log.exists())
+
+    def test_no_prompt_rejects_quoted_empty_and_whitespace_credentials(self):
+        placeholders = ('""', "''", "   ", '"   "', "'   '")
+        for placeholder in placeholders:
+            with self.subTest(discord_placeholder=placeholder):
+                self.hermes.mkdir(parents=True, exist_ok=True)
+                (self.hermes / ".env").write_text(
+                    f"DISCORD_BOT_TOKEN={placeholder}\n"
+                    "GEMINI_API_KEY=valid-api-key\n",
+                    encoding="utf-8",
+                )
+                result = self.run_installer("--no-prompt")
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertIn("DISCORD_BOT_TOKEN", result.stdout)
+                self.assertFalse((self.hermes / "plugins").exists())
+                self.assertFalse(self.log.exists())
+
+        for key in ("GEMINI_API_KEY", "GOOGLE_API_KEY"):
+            with self.subTest(api_key=key):
+                (self.hermes / ".env").write_text(
+                    "DISCORD_BOT_TOKEN=valid-discord-token\n"
+                    f"{key}=\"   \"\n",
+                    encoding="utf-8",
+                )
+                result = self.run_installer("--no-prompt")
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertIn("GEMINI_API_KEY or GOOGLE_API_KEY", result.stdout)
+                self.assertFalse((self.hermes / "plugins").exists())
+                self.assertFalse(self.log.exists())
 
     def test_no_prompt_accepts_gemini_key(self):
         result = self.run_installer("--no-prompt", env=self.ready_env())
