@@ -24,10 +24,10 @@ The combined repair is tracked in [Issue #9](https://github.com/Capslockb/gemini
 
 ## Installation behavior
 
-Running `install.sh` currently copies the feeder to:
+Running `install.sh` currently copies the feeder under the resolved Hermes root:
 
 ```text
-~/.hermes/scripts/video-frame-feeder.py
+${HERMES_HOME:-$HOME/.hermes}/scripts/video-frame-feeder.py
 ```
 
 and marks it executable. This only installs the current script; it does not resolve the startup or authentication blockers above.
@@ -35,9 +35,10 @@ and marks it executable. This only installs the current script; it does not reso
 Manual copying is equivalent:
 
 ```bash
-mkdir -p ~/.hermes/scripts
-cp scripts/video-frame-feeder.py ~/.hermes/scripts/video-frame-feeder.py
-chmod 0755 ~/.hermes/scripts/video-frame-feeder.py
+HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
+mkdir -p "$HERMES_HOME/scripts"
+cp scripts/video-frame-feeder.py "$HERMES_HOME/scripts/video-frame-feeder.py"
+chmod 0755 "$HERMES_HOME/scripts/video-frame-feeder.py"
 ```
 
 ## Intended local usage after repair
@@ -45,7 +46,8 @@ chmod 0755 ~/.hermes/scripts/video-frame-feeder.py
 The sidecar currently binds only to `127.0.0.1`, so the supported endpoint boundary is local to the bridge host:
 
 ```bash
-python3 ~/.hermes/scripts/video-frame-feeder.py \
+HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
+python3 "$HERMES_HOME/scripts/video-frame-feeder.py" \
   --endpoint http://127.0.0.1:18943/frame \
   --source-label my-display
 ```
