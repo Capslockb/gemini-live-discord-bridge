@@ -152,6 +152,15 @@ class InstallerContractTests(unittest.TestCase):
         self.assertIn("worktree: modified", result.stdout)
         self.assertTrue((self.install_dir / ".dirty").exists())
 
+    def test_existing_rerun_reports_disposition_before_no_prompt_credentials(self):
+        self.populate_existing(dirty=False)
+        result = self.run_installer("--no-prompt")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("existing directory (refused)", result.stdout)
+        self.assertIn(f"revision: {REVISION}", result.stdout)
+        self.assertNotIn("--no-prompt requires", result.stdout)
+        self.assertNotIn("python -m pip", self.log.read_text(encoding="utf-8"))
+
     def test_from_local_links_exact_checkout_and_preserves_same_link(self):
         source = self.root / "source"
         shutil.copytree(self.template, source)
@@ -192,10 +201,14 @@ class InstallerContractTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertIn("Runtime credentials: configured", result.stdout)
 
-    def test_no_prompt_accepts_google_key_fallback(self):
-        result = self.run_installer(
-            "--no-prompt", env=self.ready_env(google_fallback=True)
+    def test_no_prompt_accepts_google_key_fallback_from_env_file(self):
+        self.hermes.mkdir(parents=True, exist_ok=True)
+        (self.hermes / ".env").write_text(
+            "DISCORD_BOT_TOKEN=discord-from-file\n"
+            "GOOGLE_API_KEY=google-from-file\n",
+            encoding="utf-8",
         )
+        result = self.run_installer("--no-prompt")
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertIn("Runtime credentials: configured", result.stdout)
 
