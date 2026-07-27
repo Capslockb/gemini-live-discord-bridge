@@ -215,7 +215,7 @@ Older docs claimed or implied a few things that no longer match code:
 
 - the modular implementation now lives primarily in `bridge_core.py`, `bridge_audio.py`, `bridge_http.py`, `bridge_decls.py`, and `bridge_tools.py`; `bridge.py` is a compatibility facade;
 - default voice is `Kore`, not `en-US-JennyNeural`;
-- `DISCORD_VOICE_LIVE_USER_ID` is strongly recommended for slash inference/user-presence, but not strictly required for raw tool calls with explicit guild/channel;
+- `DISCORD_VOICE_LIVE_USER_ID` currently falls back to a repository-embedded Discord account. Configure the intended user explicitly for slash-command inference, or provide explicit `guild_id` plus `channel_id` for tool calls that do not need user inference; do not treat the embedded value as a portable default. The canonical runtime and installer fix is tracked in `Capslockb/hermes-live-discord-agent-plugin#18`, with this repository's Issue #16 retained as mirror/provenance status;
 - `KEEP_AUTOSTART_FILE` defaults true in code;
 - mutating sidecar routes are currently unavailable on `main` because their intended authentication path is blocked by Issue #5;
 - `/notes` is unauthenticated and returns persisted transcript/note data, so loopback binding is a required interim boundary;
