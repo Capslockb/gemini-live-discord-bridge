@@ -15,14 +15,14 @@ cd gemini-live-discord-bridge
 # Development install from this exact working tree
 ./install.sh --from-local
 
-# Skip credential prompts only; required values must already exist
+# Skip prompts; required credentials must already exist
 ./install.sh --no-prompt
 
 # 3. Restart the gateway so the plugin loads
 systemctl --user restart hermes-gateway
 ```
 
-A plain `./install.sh` clones into `${HERMES_HOME:-$HOME/.hermes}/plugins/discord-voice` only when that path does not already exist. On an existing installation it prints `skipping clone` and continues against the existing tree without fetching or checking its revision, so it is **not an update command**. Use `--from-local` when you need the exact current checkout. `--no-prompt` only bypasses the prompts; it does not verify that the required credentials exist before reporting installation completion. See [Issue #11](https://github.com/Capslockb/gemini-live-discord-bridge/issues/11).
+A plain `./install.sh` is a fresh-install command, not an updater. If `${HERMES_HOME:-$HOME/.hermes}/plugins/discord-voice` already exists, the installer refuses to continue, reports the existing path type, and reports the Git revision plus clean/modified worktree state when available. It does not fetch, reset, delete, or overwrite that installation. `--from-local` preserves a symlink that already targets the current checkout and refuses conflicting paths. `--no-prompt` validates non-empty `DISCORD_BOT_TOKEN` and either `GEMINI_API_KEY` or `GOOGLE_API_KEY` before installation mutation. See [Issue #11](https://github.com/Capslockb/gemini-live-discord-bridge/issues/11).
 
 `HERMES_HOME` relocates the plugin directory, Hermes environment file, Python virtual environment lookup, and installed video feeder. It does **not** currently relocate the SFX directory: `install.sh` still copies sound files to `$HOME/.hermes/voice-users/sfx`, while the runtime honors `DISCORD_VOICE_LIVE_SFX_DIR`. For a custom Hermes root, set `DISCORD_VOICE_LIVE_SFX_DIR="$HERMES_HOME/voice-users/sfx"` and populate that directory explicitly. See [Issue #18](https://github.com/Capslockb/gemini-live-discord-bridge/issues/18) and [`sfx-library.md`](sfx-library.md).
 
@@ -97,27 +97,3 @@ curl -s \
   --data-binary @frame.jpg \
   "http://127.0.0.1:18943/frame?force=true&source=manual" | python3 -m json.tool
 ```
-
-Then check:
-
-```bash
-curl -s http://127.0.0.1:18943/health | python3 -m json.tool
-```
-
-Look for `video_in_frames`, `video_sent_frames`, `video_dropped_frames`, and `video_last_reason`.
-
-## Common pitfalls
-
-- **Bridge seems slow to start** — let one connect cycle finish. Restarting the gateway repeatedly can make Discord voice/CDN retries worse.
-- **No `/voice-live` target channel found** — join a Discord voice channel first and set `DISCORD_VOICE_LIVE_USER_ID` to your Discord snowflake.
-- **`/frame`, `/say`, `/notify`, or `/stop` fail on current `main`** — this is the known authentication blocker in Issue #5, not evidence that the supplied secret is merely wrong.
-- **Need recent transcript notes** — `/notes` is currently unauthenticated and exposes recent transcript/note events; keep the sidecar loopback-only and do not proxy it while [Issue #4](https://github.com/Capslockb/gemini-live-discord-bridge/issues/4) remains open.
-- **Unexpected greeting** — set `DISCORD_VOICE_LIVE_GREETING=` if you want no text injected after setup.
-- **No inbound audio** — verify `discord-ext-voice-recv` installed, `receiving_active=true`, and the user is not filtered by `DISCORD_VOICE_LIVE_ALLOWED_SPEAKERS`.
-
-## Next
-
-- [`gemini-live-implementation.md`](gemini-live-implementation.md) — exact Gemini Live setup/audio/video/tool behavior.
-- [`architecture.md`](architecture.md) — bridge lifecycle and runtime objects.
-- [`env-vars.md`](env-vars.md) — current env defaults.
-- [`troubleshooting.md`](troubleshooting.md) — operational failures and fixes.
