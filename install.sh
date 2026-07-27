@@ -119,6 +119,46 @@ if [ ! -x "$PYTHON_BIN" ]; then
   exit 1
 fi
 
+INSTALL_REVISION="unknown"
+INSTALL_DISPOSITION=""
+LOCAL_LINK_EXISTS=0
+SOURCE_DIR=""
+
+# Inspect existing paths before credential checks or filesystem mutation so
+# every rerun reports its exact disposition and preserves local work.
+if [ "$FROM_LOCAL" = 1 ]; then
+  SOURCE_DIR=$(pwd -P)
+  echo ">> Using current directory as plugin source"
+  if [ ! -f "$SOURCE_DIR/plugin.yaml" ]; then
+    echo "ERROR: no plugin.yaml in $SOURCE_DIR. Are you in the plugin repo?"
+    exit 1
+  fi
+  if [ -L "$INSTALL_DIR" ]; then
+    existing_target=$(readlink -f "$INSTALL_DIR" 2>/dev/null || readlink "$INSTALL_DIR" 2>/dev/null || true)
+    if [ "$existing_target" != "$SOURCE_DIR" ]; then
+      echo "ERROR: $INSTALL_DIR already points to ${existing_target:-an unknown target}."
+      echo "       Refusing to replace it. Remove it deliberately before retrying --from-local."
+      exit 1
+    fi
+    echo "  disposition: existing local link preserved"
+    echo "  target: $SOURCE_DIR"
+    LOCAL_LINK_EXISTS=1
+  elif [ -e "$INSTALL_DIR" ]; then
+    echo "ERROR: $INSTALL_DIR already exists as a directory or file."
+    echo "  disposition: conflicting existing path (refused)"
+    echo "       Refusing to delete or overwrite it. Move it aside or uninstall deliberately first."
+    exit 1
+  fi
+else
+  if [ -L "$INSTALL_DIR" ] || [ -e "$INSTALL_DIR" ]; then
+    echo "ERROR: plugin installation already exists at $INSTALL_DIR."
+    report_existing_install
+    echo "       A normal rerun never fetches, resets, deletes, or overwrites an existing installation."
+    echo "       Use --from-local from the intended checkout, or move/uninstall the existing path deliberately."
+    exit 1
+  fi
+fi
+
 if [ "$NO_PROMPT" = 1 ]; then
   missing=()
   if ! has_config_value DISCORD_BOT_TOKEN; then
@@ -139,30 +179,11 @@ fi
 
 # ── Clone or copy the plugin source ───────────────────────────────────────
 mkdir -p "$PLUGINS_DIR"
-INSTALL_REVISION="unknown"
-INSTALL_DISPOSITION=""
 
 if [ "$FROM_LOCAL" = 1 ]; then
-  SOURCE_DIR=$(pwd -P)
-  echo ">> Using current directory as plugin source"
-  if [ ! -f "$SOURCE_DIR/plugin.yaml" ]; then
-    echo "ERROR: no plugin.yaml in $SOURCE_DIR. Are you in the plugin repo?"
-    exit 1
-  fi
-
-  if [ -L "$INSTALL_DIR" ]; then
-    existing_target=$(readlink -f "$INSTALL_DIR" 2>/dev/null || readlink "$INSTALL_DIR" 2>/dev/null || true)
-    if [ "$existing_target" != "$SOURCE_DIR" ]; then
-      echo "ERROR: $INSTALL_DIR already points to ${existing_target:-an unknown target}."
-      echo "       Refusing to replace it. Remove it deliberately before retrying --from-local."
-      exit 1
-    fi
+  if [ "$LOCAL_LINK_EXISTS" = 1 ]; then
     echo "  already linked $SOURCE_DIR -> $INSTALL_DIR"
     INSTALL_DISPOSITION="existing local link preserved"
-  elif [ -e "$INSTALL_DIR" ]; then
-    echo "ERROR: $INSTALL_DIR already exists as a directory or file."
-    echo "       Refusing to delete or overwrite it. Move it aside or uninstall deliberately first."
-    exit 1
   else
     ln -s "$SOURCE_DIR" "$INSTALL_DIR"
     echo "  linked $SOURCE_DIR -> $INSTALL_DIR"
@@ -170,13 +191,6 @@ if [ "$FROM_LOCAL" = 1 ]; then
   fi
   INSTALL_REVISION=$(git -C "$SOURCE_DIR" rev-parse HEAD 2>/dev/null || echo local-unversioned)
 else
-  if [ -L "$INSTALL_DIR" ] || [ -e "$INSTALL_DIR" ]; then
-    echo "ERROR: plugin installation already exists at $INSTALL_DIR."
-    report_existing_install
-    echo "       A normal rerun never fetches, resets, deletes, or overwrites an existing installation."
-    echo "       Use --from-local from the intended checkout, or move/uninstall the existing path deliberately."
-    exit 1
-  fi
   echo ">> Cloning $REPO_URL -> $INSTALL_DIR"
   git clone "$REPO_URL" "$INSTALL_DIR"
   INSTALL_REVISION=$(git -C "$INSTALL_DIR" rev-parse HEAD 2>/dev/null || echo unknown)
