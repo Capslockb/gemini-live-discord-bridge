@@ -22,17 +22,36 @@ SFX_DIR="$HOME/.hermes/voice-users/sfx"
 PYTHON_BIN="$HERMES_HOME/hermes-agent/venv/bin/python"
 ENV_FILE="$HERMES_HOME/.env"
 
+config_value_is_nonempty() {
+  local value="$1"
+
+  # Trim surrounding whitespace without evaluating or sourcing the value.
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+
+  # Treat matching single or double quotes as representation only, then trim
+  # again so placeholders such as "", '', "   ", and '   ' are empty.
+  case "$value" in
+    \"*\") value="${value#\"}"; value="${value%\"}" ;;
+    \'*\') value="${value#\'}"; value="${value%\'}" ;;
+  esac
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+
+  [ -n "$value" ]
+}
+
 has_config_value() {
   local key="$1"
   local shell_value="${!key:-}"
   local file_value=""
 
-  if [ -n "$shell_value" ]; then
+  if config_value_is_nonempty "$shell_value"; then
     return 0
   fi
   if [ -f "$ENV_FILE" ]; then
     file_value=$(grep -m1 -E "^${key}=" "$ENV_FILE" 2>/dev/null | cut -d= -f2- || true)
-    if [ -n "$file_value" ]; then
+    if config_value_is_nonempty "$file_value"; then
       return 0
     fi
   fi
@@ -44,19 +63,13 @@ credentials_ready() {
     { has_config_value GEMINI_API_KEY || has_config_value GOOGLE_API_KEY; }
 }
 
-report_existing_install() {
-  if [ -L "$INSTALL_DIR" ]; then
-    echo "  disposition: existing symlink (refused)"
-    echo "  target: $(readlink "$INSTALL_DIR" 2>/dev/null || echo unknown)"
-    return
-  fi
-
-  echo "  disposition: existing directory (refused)"
-  if git -C "$INSTALL_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+report_git_state() {
+  local path="$1"
+  if [ -d "$path" ] && git -C "$path" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     local revision
     local changes
-    revision=$(git -C "$INSTALL_DIR" rev-parse HEAD 2>/dev/null || true)
-    changes=$(git -C "$INSTALL_DIR" status --porcelain --untracked-files=normal 2>/dev/null || true)
+    revision=$(git -C "$path" rev-parse HEAD 2>/dev/null || true)
+    changes=$(git -C "$path" status --porcelain --untracked-files=normal 2>/dev/null || true)
     echo "  revision: ${revision:-unknown}"
     if [ -n "$changes" ]; then
       echo "  worktree: modified"
@@ -65,7 +78,43 @@ report_existing_install() {
     fi
   else
     echo "  revision: unversioned"
+    echo "  worktree: not-applicable"
   fi
+}
+
+report_existing_install() {
+  if [ -L "$INSTALL_DIR" ]; then
+    local target
+    local resolved_target
+    target=$(readlink "$INSTALL_DIR" 2>/dev/null || true)
+    resolved_target=$(readlink -f "$INSTALL_DIR" 2>/dev/null || true)
+    echo "  disposition: existing symlink (refused)"
+    echo "  target: ${target:-unknown}"
+    if [ -n "$resolved_target" ] && [ -d "$resolved_target" ]; then
+      report_git_state "$resolved_target"
+    else
+      echo "  revision: unavailable"
+      echo "  worktree: unavailable"
+    fi
+    return
+  fi
+
+  if [ -d "$INSTALL_DIR" ]; then
+    echo "  disposition: existing directory (refused)"
+    report_git_state "$INSTALL_DIR"
+    return
+  fi
+
+  if [ -f "$INSTALL_DIR" ]; then
+    echo "  disposition: existing file (refused)"
+    echo "  revision: not-applicable"
+    echo "  worktree: not-applicable"
+    return
+  fi
+
+  echo "  disposition: existing special path (refused)"
+  echo "  revision: not-applicable"
+  echo "  worktree: not-applicable"
 }
 
 # ── Argument parsing ──────────────────────────────────────────────────────
@@ -273,7 +322,10 @@ echo ">> Running e2e regression tests..."
 TESTS_DIR="$INSTALL_DIR/tests"
 TEST_STATUS="skipped"
 if [ -d "$TESTS_DIR" ]; then
-  if "$PYTHON_BIN" -m unittest tests.test_interrupt_latency tests.test_transcript_latency -v 2>&1 | tee /tmp/discord-voice-tests.log; then
+  if (
+    cd "$INSTALL_DIR"
+    "$PYTHON_BIN" -m unittest tests.test_interrupt_latency tests.test_transcript_latency -v
+  ) 2>&1 | tee /tmp/discord-voice-tests.log; then
     TEST_STATUS="passed"
     echo
     echo "  ✓ e2e tests passed (interrupt latency < 100ms target)"
