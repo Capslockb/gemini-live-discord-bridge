@@ -27,7 +27,7 @@ For protocol details, see [`gemini-live-implementation.md`](gemini-live-implemen
 | Var | Default | Description |
 |---|---|---|
 | `DISCORD_VOICE_LIVE_PORT` | `18943` | Local HTTP sidecar port on `127.0.0.1`. |
-| `DISCORD_VOICE_LIVE_SECRET_FILE` | `~/.hermes/voice-live-control-secret` | File used to persist the `X-API-Secret` for mutating sidecar routes. |
+| `DISCORD_VOICE_LIVE_SECRET_FILE` | `~/.hermes/voice-live-control-secret` | Runtime secret file for `X-API-Secret`. If absent, the plugin generates a secret and attempts to persist it here. Current `install.sh` instead creates `${HERMES_HOME:-$HOME/.hermes}/control.secret`, so installing does not populate the runtime-default path; see [Issue #9](https://github.com/Capslockb/gemini-live-discord-bridge/issues/9). |
 | `DISCORD_VOICE_LIVE_NOTIFY_TIMEOUT` | `5` | Timeout for notification-side HTTP/control operations. |
 
 The intended policy leaves `/health` and `/notes` anonymous and requires `X-API-Secret` for `/stop`, `/say`, `/frame`, and `/notify`. On current `main`, the mutating-route authentication path is blocked by [Issue #5](https://github.com/Capslockb/gemini-live-discord-bridge/issues/5), so those routes must not be treated as operational until the runtime fix and exact-head validation land. `/notes` can return persisted transcript events and the backing file path without authentication; keep the sidecar loopback-only and do not expose it through a proxy or browser-facing network path while [Issue #4](https://github.com/Capslockb/gemini-live-discord-bridge/issues/4) remains open.
