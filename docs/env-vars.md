@@ -136,9 +136,10 @@ The intended policy leaves `/health` and `/notes` anonymous and requires `X-API-
 
 | Var | Default | Description |
 |---|---|---|
-| `GOOGLE_API_BIN` | auto-detected | Path to `google_api.py` used for Google Workspace/email helpers. |
 | `HASS_URL` | `http://homeassistant.local:8123` | Home Assistant base URL. |
 | `HASS_TOKEN` | — | Home Assistant long-lived access token. Required for HA tools. |
 | `OPENCODE_BIN` | `~/.local/bin/opencode` | Path to OpenCode binary. |
 | `OPENCODE_DEFAULT_MODEL` | OpenCode default | Model passed to OpenCode. |
 | `OPENCODE_TMUX_SESSION` | `voice-opencode` | tmux session name for delegated OpenCode work. |
+
+Current limitation: the Google Workspace helper path is not configurable through an environment variable and is not auto-detected. `bridge_config.py` hard-codes `$HOME/.hermes/hermes-agent/skills/productivity/google-workspace/scripts/google_api.py`; setting `GOOGLE_API_BIN` or changing `HERMES_HOME` does not relocate that lookup. Runtime/path remediation is tracked in [Issue #21](https://github.com/Capslockb/gemini-live-discord-bridge/issues/21).
