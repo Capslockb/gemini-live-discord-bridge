@@ -68,10 +68,15 @@ report_git_state() {
   if [ -d "$path" ] && git -C "$path" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     local revision
     local changes
+    local status_available=0
     revision=$(git -C "$path" rev-parse HEAD 2>/dev/null || true)
-    changes=$(git -C "$path" status --porcelain --untracked-files=normal 2>/dev/null || true)
+    if changes=$(git -C "$path" status --porcelain --untracked-files=normal 2>/dev/null); then
+      status_available=1
+    fi
     echo "  revision: ${revision:-unknown}"
-    if [ -n "$changes" ]; then
+    if [ "$status_available" -ne 1 ]; then
+      echo "  worktree: unavailable"
+    elif [ -n "$changes" ]; then
       echo "  worktree: modified"
     else
       echo "  worktree: clean"
