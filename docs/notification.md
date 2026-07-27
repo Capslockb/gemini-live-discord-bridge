@@ -50,7 +50,7 @@ The exact result shape depends on the selected delivery path.
 }
 ```
 
-Returns `{scheduled: <id>, fire_at_epoch: <ts>}`. The schedule persists to `~/.hermes/voice-scheduled-notifications.jsonl` and is polled by a background thread.
+Returns `{scheduled: <id>, fire_at_epoch: <ts>}`. The schedule currently persists to `$HOME/.hermes/voice-scheduled-notifications.jsonl`; `HERMES_HOME` does not relocate this file and there is no configuration override. Custom-root deployments must secure, back up, and clean up that default-home path separately until [Issue #20](https://github.com/Capslockb/gemini-live-discord-bridge/issues/20) is resolved.
 
 Other actions on the same tool:
 
