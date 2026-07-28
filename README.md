@@ -81,7 +81,7 @@ ${HERMES_HOME:-$HOME/.hermes}/.env
 
 Current exception: `install.sh` still copies bundled SFX to `$HOME/.hermes/voice-users/sfx`, even when `HERMES_HOME` points elsewhere. For a custom root, set `DISCORD_VOICE_LIVE_SFX_DIR` and populate that directory explicitly. The executable path unification is tracked in [Issue #18](https://github.com/Capslockb/gemini-live-discord-bridge/issues/18).
 
-A plain `./install.sh` clones only when the plugin path does not already exist. On a rerun it leaves the existing tree unchanged, so it is not an update command. Use `--from-local` to install the exact current checkout. `--no-prompt` only bypasses prompts and can still report completion when required credentials are absent. The executable correction is tracked in [Issue #11](https://github.com/Capslockb/gemini-live-discord-bridge/issues/11).
+A plain `./install.sh` clones only when the plugin path does not already exist. On a rerun it leaves the existing tree unchanged, so it is not an update command. Current `--from-local` behavior is destructive to an existing plugin path: it removes an existing installation directory and replaces any existing install symlink before linking the current checkout. Back up local modifications and verify the target first. `--no-prompt` only bypasses prompts and can still report completion when required credentials are absent. The non-destructive installer correction is tracked in [Issue #11](https://github.com/Capslockb/gemini-live-discord-bridge/issues/11) and draft [PR #22](https://github.com/Capslockb/gemini-live-discord-bridge/pull/22).
 
 ---
 
