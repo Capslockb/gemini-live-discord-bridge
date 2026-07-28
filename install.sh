@@ -190,6 +190,7 @@ if [ "$FROM_LOCAL" = 1 ]; then
     fi
     echo "  disposition: existing local link preserved"
     echo "  target: $SOURCE_DIR"
+    report_git_state "$SOURCE_DIR"
     LOCAL_LINK_EXISTS=1
   elif [ -e "$INSTALL_DIR" ]; then
     echo "ERROR: $INSTALL_DIR conflicts with the requested --from-local link."
