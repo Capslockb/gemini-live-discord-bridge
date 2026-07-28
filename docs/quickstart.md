@@ -22,7 +22,9 @@ cd gemini-live-discord-bridge
 systemctl --user restart hermes-gateway
 ```
 
-A plain `./install.sh` clones into `${HERMES_HOME:-$HOME/.hermes}/plugins/discord-voice` only when that path does not already exist. On an existing installation it prints `skipping clone` and continues against the existing tree without fetching or checking its revision, so it is **not an update command**. Use `--from-local` when you need the exact current checkout. `--no-prompt` only bypasses the prompts; it does not verify that the required credentials exist before reporting installation completion. See [Issue #11](https://github.com/Capslockb/gemini-live-discord-bridge/issues/11).
+A plain `./install.sh` clones into `${HERMES_HOME:-$HOME/.hermes}/plugins/discord-voice` only when that path does not already exist. On an existing installation it prints `skipping clone` and continues against the existing tree without fetching or checking its revision, so it is **not an update command**. `--no-prompt` only bypasses the prompts; it does not verify that the required credentials exist before reporting installation completion.
+
+On current `main`, `--from-local` is destructive to an existing plugin path: it removes an existing installation directory and replaces any existing install symlink before linking the current checkout. Back up local modifications and verify the target before using it. Draft [PR #22](https://github.com/Capslockb/gemini-live-discord-bridge/pull/22) proposes the non-destructive contract accepted in [Issue #11](https://github.com/Capslockb/gemini-live-discord-bridge/issues/11).
 
 Current interactive credential writes do not preserve every secret value literally: `&`, `|`, and backslashes can be altered by the installer's `sed` replacement path. Until [Issue #23](https://github.com/Capslockb/gemini-live-discord-bridge/issues/23) is fixed, do not enter credentials containing those characters through the prompts. Populate `${HERMES_HOME:-$HOME/.hermes}/.env` through a trusted editor or secret-management path, keep its permissions restrictive, and then use `--no-prompt`. Never put real secrets in command-line arguments or shell history.
 
