@@ -109,6 +109,43 @@ class FromLocalConflictReportingTests(unittest.TestCase):
         self.assertIn("Refusing to delete or overwrite it", result.stdout)
         self.assertEqual(self.install_dir.read_text(encoding="utf-8"), "preserve\n")
 
+    def test_from_local_mismatched_symlink_reports_target_revision_and_preserves_link(self):
+        target = self.root / "other-checkout"
+        target.mkdir(parents=True)
+        (target / ".git").mkdir()
+        marker = target / "preserve.me"
+        marker.write_text("keep\n", encoding="utf-8")
+        self.install_dir.parent.mkdir(parents=True)
+        self.install_dir.symlink_to(target, target_is_directory=True)
+
+        result = self.run_installer()
+
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("existing symlink (refused)", result.stdout)
+        self.assertIn(f"target: {target}", result.stdout)
+        self.assertIn(f"revision: {REVISION}", result.stdout)
+        self.assertIn("worktree: clean", result.stdout)
+        self.assertIn("Refusing to replace it", result.stdout)
+        self.assertTrue(self.install_dir.is_symlink())
+        self.assertEqual(self.install_dir.resolve(), target)
+        self.assertEqual(marker.read_text(encoding="utf-8"), "keep\n")
+
+    def test_from_local_dangling_symlink_reports_controlled_unavailable_state(self):
+        missing_target = self.root / "missing-checkout"
+        self.install_dir.parent.mkdir(parents=True)
+        self.install_dir.symlink_to(missing_target, target_is_directory=True)
+
+        result = self.run_installer()
+
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("existing symlink (refused)", result.stdout)
+        self.assertIn(f"target: {missing_target}", result.stdout)
+        self.assertIn("revision: unavailable", result.stdout)
+        self.assertIn("worktree: unavailable", result.stdout)
+        self.assertIn("Refusing to replace it", result.stdout)
+        self.assertTrue(self.install_dir.is_symlink())
+        self.assertEqual(os.readlink(self.install_dir), str(missing_target))
+
 
 if __name__ == "__main__":
     unittest.main()
