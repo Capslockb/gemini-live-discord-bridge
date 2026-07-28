@@ -15,14 +15,14 @@ cd gemini-live-discord-bridge
 # Development install from this exact working tree
 ./install.sh --from-local
 
-# Skip credential prompts only; required values must already exist
+# Skip prompts; required credentials must already exist
 ./install.sh --no-prompt
 
 # 3. Restart the gateway so the plugin loads
 systemctl --user restart hermes-gateway
 ```
 
-A plain `./install.sh` clones into `${HERMES_HOME:-$HOME/.hermes}/plugins/discord-voice` only when that path does not already exist. On an existing installation it prints `skipping clone` and continues against the existing tree without fetching or checking its revision, so it is **not an update command**. Use `--from-local` when you need the exact current checkout. `--no-prompt` only bypasses the prompts; it does not verify that the required credentials exist before reporting installation completion. See [Issue #11](https://github.com/Capslockb/gemini-live-discord-bridge/issues/11).
+A plain `./install.sh` is a fresh-install command, not an updater. If `${HERMES_HOME:-$HOME/.hermes}/plugins/discord-voice` already exists, the installer refuses to continue, reports the existing path type, and reports the Git revision plus clean/modified worktree state when available. It does not fetch, reset, delete, or overwrite that installation. `--from-local` preserves a symlink that already targets the current checkout and refuses conflicting paths. `--no-prompt` validates non-empty `DISCORD_BOT_TOKEN` and either `GEMINI_API_KEY` or `GOOGLE_API_KEY` before installation mutation. See [Issue #11](https://github.com/Capslockb/gemini-live-discord-bridge/issues/11).
 
 Current interactive credential writes do not preserve every secret value literally: `&`, `|`, and backslashes can be altered by the installer's `sed` replacement path. Until [Issue #23](https://github.com/Capslockb/gemini-live-discord-bridge/issues/23) is fixed, do not enter credentials containing those characters through the prompts. Populate `${HERMES_HOME:-$HOME/.hermes}/.env` through a trusted editor or secret-management path, keep its permissions restrictive, and then use `--no-prompt`. Never put real secrets in command-line arguments or shell history.
 

@@ -5,9 +5,10 @@
 #   ./install.sh                  # full install (clone + setup + prompts)
 #   ./install.sh --from-local     # use the current working dir (for development)
 #   ./install.sh --uninstall      # remove symlinks + env entries
-#   ./install.sh --no-prompt      # skip env-var prompts (use existing)
+#   ./install.sh --no-prompt      # skip prompts; require existing credentials
 #
-# Idempotent: re-running on an installed system is safe.
+# Re-running never overwrites an existing install. Use --from-local to link
+# an exact local checkout deliberately.
 
 set -euo pipefail
 
@@ -21,6 +22,149 @@ SFX_DIR="$HOME/.hermes/voice-users/sfx"
 PYTHON_BIN="$HERMES_HOME/hermes-agent/venv/bin/python"
 ENV_FILE="$HERMES_HOME/.env"
 
+config_value_is_nonempty() {
+  local value="$1"
+
+  # Trim surrounding whitespace without evaluating or sourcing the value.
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+
+  # Treat matching single or double quotes as representation only, then trim
+  # again so placeholders such as "", '', "   ", and '   ' are empty.
+  case "$value" in
+    \"*\") value="${value#\"}"; value="${value%\"}" ;;
+    \'*\') value="${value#\'}"; value="${value%\'}" ;;
+  esac
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+
+  [ -n "$value" ]
+}
+
+has_config_value() {
+  local key="$1"
+  local shell_value="${!key:-}"
+  local file_value=""
+
+  if config_value_is_nonempty "$shell_value"; then
+    return 0
+  fi
+  if [ -f "$ENV_FILE" ]; then
+    file_value=$(grep -m1 -E "^${key}=" "$ENV_FILE" 2>/dev/null | cut -d= -f2- || true)
+    if config_value_is_nonempty "$file_value"; then
+      return 0
+    fi
+  fi
+  return 1
+}
+
+credentials_ready() {
+  has_config_value DISCORD_BOT_TOKEN && \
+    { has_config_value GEMINI_API_KEY || has_config_value GOOGLE_API_KEY; }
+}
+
+resolve_exact_git_revision() {
+  local path="$1"
+  local physical_path
+  local worktree_root
+  local revision
+
+  if [ ! -d "$path" ] || ! git -C "$path" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    echo "unversioned"
+    return
+  fi
+
+  physical_path=$(cd "$path" 2>/dev/null && pwd -P || true)
+  worktree_root=$(git -C "$path" rev-parse --show-toplevel 2>/dev/null || true)
+  if [ -n "$worktree_root" ]; then
+    worktree_root=$(cd "$worktree_root" 2>/dev/null && pwd -P || true)
+  elif [ -n "$physical_path" ] && [ -e "$physical_path/.git" ]; then
+    # Preserve compatibility with controlled Git test doubles while still
+    # requiring a repository marker at the exact inspected directory.
+    worktree_root="$physical_path"
+  fi
+
+  if [ -z "$physical_path" ] || [ -z "$worktree_root" ]; then
+    echo "unavailable"
+    return
+  fi
+  if [ "$physical_path" != "$worktree_root" ]; then
+    echo "unversioned"
+    return
+  fi
+
+  revision=$(git -C "$path" rev-parse HEAD 2>/dev/null || true)
+  echo "${revision:-unknown}"
+}
+
+report_git_state() {
+  local path="$1"
+  local revision
+  local changes
+  local status_available=0
+
+  revision=$(resolve_exact_git_revision "$path")
+  case "$revision" in
+    unavailable)
+      echo "  revision: unavailable"
+      echo "  worktree: unavailable"
+      return
+      ;;
+    unversioned)
+      echo "  revision: unversioned"
+      echo "  worktree: not-applicable"
+      return
+      ;;
+  esac
+
+  if changes=$(git -C "$path" status --porcelain --untracked-files=normal 2>/dev/null); then
+    status_available=1
+  fi
+  echo "  revision: $revision"
+  if [ "$status_available" -ne 1 ]; then
+    echo "  worktree: unavailable"
+  elif [ -n "$changes" ]; then
+    echo "  worktree: modified"
+  else
+    echo "  worktree: clean"
+  fi
+}
+
+report_existing_install() {
+  if [ -L "$INSTALL_DIR" ]; then
+    local target
+    local resolved_target
+    target=$(readlink "$INSTALL_DIR" 2>/dev/null || true)
+    resolved_target=$(readlink -f "$INSTALL_DIR" 2>/dev/null || true)
+    echo "  disposition: existing symlink (refused)"
+    echo "  target: ${target:-unknown}"
+    if [ -n "$resolved_target" ] && [ -d "$resolved_target" ]; then
+      report_git_state "$resolved_target"
+    else
+      echo "  revision: unavailable"
+      echo "  worktree: unavailable"
+    fi
+    return
+  fi
+
+  if [ -d "$INSTALL_DIR" ]; then
+    echo "  disposition: existing directory (refused)"
+    report_git_state "$INSTALL_DIR"
+    return
+  fi
+
+  if [ -f "$INSTALL_DIR" ]; then
+    echo "  disposition: existing file (refused)"
+    echo "  revision: not-applicable"
+    echo "  worktree: not-applicable"
+    return
+  fi
+
+  echo "  disposition: existing special path (refused)"
+  echo "  revision: not-applicable"
+  echo "  worktree: not-applicable"
+}
+
 # ── Argument parsing ──────────────────────────────────────────────────────
 FROM_LOCAL=0
 UNINSTALL=0
@@ -31,7 +175,7 @@ for arg in "$@"; do
     --uninstall)  UNINSTALL=1 ;;
     --no-prompt)  NO_PROMPT=1 ;;
     -h|--help)
-      head -16 "$0" | tail -12
+      head -17 "$0" | tail -13
       exit 0
       ;;
     *) echo "Unknown arg: $arg"; exit 1 ;;
@@ -65,6 +209,49 @@ echo "  INSTALL_DIR:  $INSTALL_DIR"
 echo "  Python venv:  $PYTHON_BIN"
 echo
 
+INSTALL_REVISION="unknown"
+INSTALL_DISPOSITION=""
+LOCAL_LINK_EXISTS=0
+SOURCE_DIR=""
+
+# Inspect existing paths before credential checks, runtime prerequisites, or
+# filesystem mutation so every rerun reports its exact disposition and
+# preserves local work even when the Hermes venv is absent or broken.
+if [ "$FROM_LOCAL" = 1 ]; then
+  SOURCE_DIR=$(pwd -P)
+  echo ">> Using current directory as plugin source"
+  if [ ! -f "$SOURCE_DIR/plugin.yaml" ]; then
+    echo "ERROR: no plugin.yaml in $SOURCE_DIR. Are you in the plugin repo?"
+    exit 1
+  fi
+  if [ -L "$INSTALL_DIR" ]; then
+    existing_target=$(readlink -f "$INSTALL_DIR" 2>/dev/null || true)
+    if [ -z "$existing_target" ] || [ "$existing_target" != "$SOURCE_DIR" ]; then
+      echo "ERROR: $INSTALL_DIR conflicts with the requested --from-local link."
+      report_existing_install
+      echo "       Refusing to replace it. Remove it deliberately before retrying --from-local."
+      exit 1
+    fi
+    echo "  disposition: existing local link preserved"
+    echo "  target: $SOURCE_DIR"
+    report_git_state "$SOURCE_DIR"
+    LOCAL_LINK_EXISTS=1
+  elif [ -e "$INSTALL_DIR" ]; then
+    echo "ERROR: $INSTALL_DIR conflicts with the requested --from-local link."
+    report_existing_install
+    echo "       Refusing to delete or overwrite it. Move it aside or uninstall deliberately first."
+    exit 1
+  fi
+else
+  if [ -L "$INSTALL_DIR" ] || [ -e "$INSTALL_DIR" ]; then
+    echo "ERROR: plugin installation already exists at $INSTALL_DIR."
+    report_existing_install
+    echo "       A normal rerun never fetches, resets, deletes, or overwrites an existing installation."
+    echo "       Use --from-local from the intended checkout, or move/uninstall the existing path deliberately."
+    exit 1
+  fi
+fi
+
 if [ ! -x "$PYTHON_BIN" ]; then
   echo "ERROR: Hermes Python venv not found at $PYTHON_BIN"
   echo "       Is Hermes installed? Expected layout:"
@@ -72,30 +259,48 @@ if [ ! -x "$PYTHON_BIN" ]; then
   exit 1
 fi
 
+if [ "$NO_PROMPT" = 1 ]; then
+  missing=()
+  if ! has_config_value DISCORD_BOT_TOKEN; then
+    missing+=("DISCORD_BOT_TOKEN")
+  fi
+  if ! has_config_value GEMINI_API_KEY && ! has_config_value GOOGLE_API_KEY; then
+    missing+=("GEMINI_API_KEY or GOOGLE_API_KEY")
+  fi
+  if [ "${#missing[@]}" -gt 0 ]; then
+    echo "ERROR: --no-prompt requires existing non-empty credential values before installation:"
+    for key in "${missing[@]}"; do
+      echo "  - $key"
+    done
+    echo "Set them in the environment or $ENV_FILE, then rerun. Secret values were not read into output."
+    exit 1
+  fi
+fi
+
 # ── Clone or copy the plugin source ───────────────────────────────────────
 mkdir -p "$PLUGINS_DIR"
 
 if [ "$FROM_LOCAL" = 1 ]; then
-  echo ">> Using current directory as plugin source"
-  if [ ! -f "plugin.yaml" ]; then
-    echo "ERROR: no plugin.yaml in $(pwd). Are you in the plugin repo?"
-    exit 1
-  fi
-  # If the install dir exists and isn't a symlink to here, offer to replace
-  if [ -d "$INSTALL_DIR" ] && [ ! -L "$INSTALL_DIR" ]; then
-    echo "  removing existing install at $INSTALL_DIR"
-    rm -rf "$INSTALL_DIR"
-  fi
-  if [ -L "$INSTALL_DIR" ]; then rm -f "$INSTALL_DIR"; fi
-  ln -s "$(pwd)" "$INSTALL_DIR"
-  echo "  linked $(pwd) -> $INSTALL_DIR"
-else
-  if [ -L "$INSTALL_DIR" ] || [ -d "$INSTALL_DIR" ]; then
-    echo ">> Plugin already installed at $INSTALL_DIR (skipping clone)"
+  if [ "$LOCAL_LINK_EXISTS" = 1 ]; then
+    echo "  already linked $SOURCE_DIR -> $INSTALL_DIR"
+    INSTALL_DISPOSITION="existing local link preserved"
   else
-    echo ">> Cloning $REPO_URL -> $INSTALL_DIR"
-    git clone "$REPO_URL" "$INSTALL_DIR"
+    ln -s "$SOURCE_DIR" "$INSTALL_DIR"
+    echo "  linked $SOURCE_DIR -> $INSTALL_DIR"
+    INSTALL_DISPOSITION="new local link"
   fi
+  SOURCE_REVISION=$(resolve_exact_git_revision "$SOURCE_DIR")
+  case "$SOURCE_REVISION" in
+    unversioned) INSTALL_REVISION="local-unversioned" ;;
+    unavailable) INSTALL_REVISION="unknown" ;;
+    *) INSTALL_REVISION="$SOURCE_REVISION" ;;
+  esac
+else
+  echo ">> Cloning $REPO_URL -> $INSTALL_DIR"
+  git clone "$REPO_URL" "$INSTALL_DIR"
+  INSTALL_REVISION=$(git -C "$INSTALL_DIR" rev-parse HEAD 2>/dev/null || echo unknown)
+  INSTALL_DISPOSITION="fresh remote clone"
+  echo "  cloned revision: $INSTALL_REVISION"
 fi
 
 # ── Install Python dependencies ──────────────────────────────────────────
@@ -171,11 +376,17 @@ echo "Video frame feeder installed: $HERMES_HOME/scripts/video-frame-feeder.py"
 echo
 echo ">> Running e2e regression tests..."
 TESTS_DIR="$INSTALL_DIR/tests"
+TEST_STATUS="skipped"
 if [ -d "$TESTS_DIR" ]; then
-  if "$PYTHON_BIN" -m unittest tests.test_interrupt_latency tests.test_transcript_latency -v 2>&1 | tee /tmp/discord-voice-tests.log; then
+  if (
+    cd "$INSTALL_DIR"
+    "$PYTHON_BIN" -m unittest tests.test_interrupt_latency tests.test_transcript_latency -v
+  ) 2>&1 | tee /tmp/discord-voice-tests.log; then
+    TEST_STATUS="passed"
     echo
     echo "  ✓ e2e tests passed (interrupt latency < 100ms target)"
   else
+    TEST_STATUS="failed"
     echo
     echo "  ⚠ e2e tests FAILED — see /tmp/discord-voice-tests.log"
     echo "  The plugin is installed but interrupt latency is not verified."
@@ -186,7 +397,6 @@ else
 fi
 
 # ── Env var prompts ──────────────────────────────────────────────────────
-
 if [ "$NO_PROMPT" = 0 ]; then
   echo
   echo ">> Required environment variables (written to $ENV_FILE)"
@@ -204,7 +414,6 @@ if [ "$NO_PROMPT" = 0 ]; then
     if [ -z "$current" ]; then
       read -r -s -p "    Enter $var: " val; echo
       if [ -n "$val" ]; then
-        # Append (or update) the key
         if grep -qE "^${var}=" "$ENV_FILE" 2>/dev/null; then
           sed -i "s|^${var}=.*|${var}=${val}|" "$ENV_FILE"
         else
@@ -217,7 +426,6 @@ if [ "$NO_PROMPT" = 0 ]; then
     fi
   done
 
-  # Optional: discord user id (for the bot to know who to listen to)
   if ! grep -qE "^DISCORD_VOICE_LIVE_USER_ID=" "$ENV_FILE" 2>/dev/null; then
     read -r -p "  DISCORD_VOICE_LIVE_USER_ID (your Discord snowflake) [optional, Enter to skip]: " uid
     if [ -n "$uid" ]; then
@@ -231,15 +439,24 @@ fi
 
 # ── Done ──────────────────────────────────────────────────────────────────
 echo
-echo "== Install complete =="
+echo "== Installation finished =="
 echo
-echo "  Installed at:  $INSTALL_DIR"
-echo "  Docs:          $INSTALL_DIR/docs/"
-echo "  SFX dir:       $SFX_DIR"
-echo "  Env file:      $ENV_FILE"
+echo "  Installed at:        $INSTALL_DIR"
+echo "  Source disposition:  $INSTALL_DISPOSITION"
+echo "  Source revision:     $INSTALL_REVISION"
+echo "  Dependency install:  completed"
+echo "  Compile check:       passed"
+echo "  Regression tests:    $TEST_STATUS"
+if credentials_ready; then
+  echo "  Runtime credentials: configured"
+else
+  echo "  Runtime credentials: incomplete — set DISCORD_BOT_TOKEN and GEMINI_API_KEY or GOOGLE_API_KEY"
+fi
+echo "  Docs:                $INSTALL_DIR/docs/"
+echo "  SFX dir:             $SFX_DIR"
+echo "  Env file:            $ENV_FILE"
 echo
 echo "Next steps:"
-echo "  1. Restart the Hermes gateway so it picks up the new plugin:"
+echo "  1. Restart the Hermes gateway only after runtime credentials are configured:"
 echo "       systemctl --user restart hermes-gateway"
 echo "  2. From Discord, run:   /voice-live"
-echo
