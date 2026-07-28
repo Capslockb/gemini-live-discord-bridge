@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Video frame feeder — Hermes Live</title>
-<meta name="description" content="Companion feeder script that captures your local screen and pushes frames to the bridge over HTTP.">
+<meta name="description" content="Current status, installation behavior, local network boundary, and validation requirements for the video frame feeder.">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -15,7 +15,7 @@
       <div class="brand-mark">H</div>
       <div>
         <div class="brand-text">Hermes Live</div>
-        <div class="brand-sub">v0.3.4 · VOPI build</div>
+        <div class="brand-sub">v0.3.5</div>
       </div>
     </div>
 
@@ -29,7 +29,7 @@
       <a href="quickstart.html">Quick start</a>
       <a href="architecture.html">Architecture</a>
       <div class="nav-section">Core systems</div>
-      <a href="personality.html">Personality</a>
+      <a href="personality.html">Conversational behavior</a>
       <a href="fallback-chain.html">Fallback chain</a>
       <a href="notification.html">Notifications</a>
       <a href="email-brief.html">Email brief</a>
@@ -45,62 +45,132 @@
 
     <div class="sidebar-foot">
       <a href="https://github.com/Capslockb/gemini-live-discord-bridge">GitHub →</a><br>
-      MIT licensed · Hermes Agent plugin
+      License decision pending · <a href="https://github.com/Capslockb/gemini-live-discord-bridge/issues/7">Issue #7</a>
     </div>
   </aside>
 
   <main class="main">
     <div class="topbar">
-      <span class="crumb">Video</span>
+      <span class="crumb">Video feeder</span>
       <span class="sep">/</span>
       <span>docs-site/</span>
       <div class="right">
-        <span class="pill good">v0.3.4.2</span>
-        <span class="pill warn">VOPI build</span>
+        <span class="pill good">v0.3.5</span>
+        <span class="pill warn">Current status: blocked</span>
       </div>
     </div>
 
     <article class="content">
-<h1>Video Frame Feeder</h1>
+<h1>Video frame feeder</h1>
 
-<p>The <code>video-frame-feeder.py</code> is a companion script that captures your local screen and pushes frames to the <code>discord-voice</code> bridge's <code>/frame</code> endpoint. This allows Gemini Live to "see" what you are doing in real-time.</p>
+<p>The repository includes <code>scripts/video-frame-feeder.py</code>, a companion screen-capture client for the bridge's <code>/frame</code> route. The intended flow is:</p>
 
-<h2>⚠️ Critical Constraint: How it Works</h2>
-<p><strong>Discord bots cannot see user screen-shares natively.</strong> </p>
+<pre><code>local display → FFmpeg capture → authenticated loopback POST /frame → Gemini Live</code></pre>
 
-<p>If you share your screen within the Discord app, the bot <strong>cannot</strong> see it. To give the bot vision, you must run this feeder on a machine that has a real display (e.g., your laptop). The feeder captures the display locally and sends the image data over HTTP to the bridge.</p>
+<p>Discord bots cannot consume a user's Discord screen share through this plugin. The feeder captures a real local display or window instead.</p>
 
-<ul><li><strong>Correct Flow:</strong> Laptop (Feeder) $\rightarrow$ HTTP POST $\rightarrow$ Bridge $\rightarrow$ Gemini Live.</li><li><strong>Wrong Flow:</strong> Laptop $\rightarrow$ Discord Screen Share $\rightarrow$ Bot (Blind).</li></ul>
+<h2>Current status: blocked</h2>
 
-<h2>Installation</h2>
+<p><strong>Do not treat the installed feeder or <code>voice_live_frame</code> tool as operational on current <code>main</code>.</strong></p>
 
-<h3>Automatic</h3>
-<p>Running <code>install.sh</code> automatically copies the feeder to <code>~/.hermes/scripts/video-frame-feeder.py</code> and sets the correct permissions.</p>
+<p>The connected blockers are:</p>
 
-<h3>Manual</h3>
-<p>If you need to install it manually:</p>
-<pre><code class="lang-bash">mkdir -p ~/.hermes/scripts/
-cp scripts/video-frame-feeder.py ~/.hermes/scripts/video-frame-feeder.py
-chmod +x ~/.hermes/scripts/video-frame-feeder.py</code></pre>
+<ol>
+<li><code>scripts/video-frame-feeder.py</code> assigns argparse's reserved <code>-h</code> option to <code>--height</code>, so parser construction fails before <code>--help</code> or capture can run.</li>
+<li>Current <code>/frame</code> authentication fails in <code>bridge_http.py</code> before returning a controlled authorization result; see <a href="https://github.com/Capslockb/gemini-live-discord-bridge/issues/5">Issue #5</a>.</li>
+<li>The external feeder sends no <code>X-API-Secret</code> header.</li>
+<li>The built-in <code>voice_live_frame</code> client in <code>__init__.py</code> also sends no <code>X-API-Secret</code> header.</li>
+<li><code>install.sh</code> creates <code>~/.hermes/control.secret</code>, while the runtime reads <code>DISCORD_VOICE_LIVE_SECRET_FILE</code>, defaulting to <code>~/.hermes/voice-live-control-secret</code>. The installer-created file is not the runtime control secret.</li>
+</ol>
 
-<h2>Usage & CLI Flags</h2>
+<p>The combined repair is tracked in <a href="https://github.com/Capslockb/gemini-live-discord-bridge/issues/9">Issue #9</a>. It requires separately reviewed executable and security-sensitive changes.</p>
 
-<h3>Quick Start</h3>
-<p>Run the feeder by pointing it to your bridge's Tailscale or local URL:</p>
-<pre><code class="lang-bash">python3 ~/.hermes/scripts/video-frame-feeder.py --endpoint http://&lt;your-bridge-tailscale-url&gt;:18943/frame --source-label my-laptop</code></pre>
+<h2>Installation behavior</h2>
 
-<h3>CLI Flags</h3>
-<table><thead><tr><th>Flag</th><th>Description</th></tr></thead><tbody><tr><td><code>--endpoint</code></td><td>The URL of the bridge's <code>/frame</code> endpoint (required).</td></tr><tr><td><code>--source</code></td><td>Screen source (e.g., <code>0</code> for primary, <code>DISPLAY</code> env var).</td></tr><tr><td><code>--min-change</code></td><td>Minimum Hamming distance (0-64) to trigger a send. Default: <code>4</code>.</td></tr><tr><td><code>--stddev-min</code></td><td>Minimum standard deviation of pixels to consider "content". Default: <code>0</code>.</td></tr><tr><td><code>--no-content-filter</code></td><td>Disable perceptual hashing and stddev checks.</td></tr><tr><td><code>--source-label</code></td><td>Label for this feed (e.g., <code>my-laptop</code>), sent in the <code>X-Source-Label</code> header.</td></tr><tr><td><code>--once</code></td><td>Capture a single frame and exit.</td></tr></tbody></table>
+<p>Running <code>install.sh</code> currently copies the feeder under the resolved Hermes root:</p>
 
-<h2>Content-Aware Filtering</h2>
-<p>To save bandwidth and tokens, the feeder uses a perceptual hash (aHash). It generates a 64-bit grayscale thumbnail of the screen and compares it to the previous frame. If the Hamming distance is below <code>--min-change</code>, the frame is dropped. This prevents the feeder from spamming identical static images (like a code editor) while still reacting to movement.</p>
+<pre><code>${HERMES_HOME:-$HOME/.hermes}/scripts/video-frame-feeder.py</code></pre>
 
-<h2>Troubleshooting</h2>
+<p>and marks it executable. This installs the current script only; it does not resolve the startup or authentication blockers above.</p>
 
-<ul><li><strong>Black frames / No frames sent:</strong> The content filter might be too aggressive. Try <code>--stddev-min 0</code> or <code>--no-content-filter</code>.</li><li><strong>Too many frames / High CPU:</strong> Increase <code>--min-change</code> (e.g., to <code>8</code> or <code>12</code>).</li><li><strong>Bridge Auth Error:</strong> Ensure <code>~/.hermes/control.secret</code> on the feeder machine matches the one on the bridge machine (or is created by <code>install.sh</code>).</li><li><strong>"x11 not found" / "Unable to get screen":</strong> This is a headless host. You <strong>must</strong> run the feeder on a machine with a physical or virtual display (X11/Wayland).</li></ul>
+<p>Manual copying is equivalent:</p>
 
-<h2>See Also</h2>
-<ul><li><code>voice_live_frame</code> tool: Allows the agent to manually request a frame move from chat.</li><li><code>voice_live_video_status</code> tool: Check the current count of accepted vs. dropped frames.</li></ul>
+<pre><code class="lang-bash">HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
+mkdir -p "$HERMES_HOME/scripts"
+cp scripts/video-frame-feeder.py "$HERMES_HOME/scripts/video-frame-feeder.py"
+chmod 0755 "$HERMES_HOME/scripts/video-frame-feeder.py"</code></pre>
+
+<h2>Intended local usage after repair</h2>
+
+<p>The sidecar currently binds only to <code>127.0.0.1</code>, so the supported endpoint boundary is local to the bridge host:</p>
+
+<pre><code class="lang-bash">HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
+python3 "$HERMES_HOME/scripts/video-frame-feeder.py" \
+  --endpoint http://127.0.0.1:18943/frame \
+  --source-label my-display</code></pre>
+
+<p>Do not use a Tailscale, LAN, proxy, or browser-accessible endpoint with the current server. The sidecar is loopback-only by design, and <code>/notes</code> remains unauthenticated transcript data while <a href="https://github.com/Capslockb/gemini-live-discord-bridge/issues/4">Issue #4</a> is open.</p>
+
+<p>After the repair, clients must obtain the canonical control secret without printing or logging it and attach it as <code>X-API-Secret</code>. Do not copy <code>~/.hermes/control.secret</code> as a workaround; that is not the runtime's default secret file.</p>
+
+<h2>Current CLI definition</h2>
+
+<p>These values are declared in the script, although the <code>-h</code> conflict prevents normal CLI startup:</p>
+
+<table>
+<thead><tr><th>Flag</th><th>Current behavior</th></tr></thead>
+<tbody>
+<tr><td><code>--endpoint</code></td><td>Defaults to <code>VOICE_BRIDGE_FRAME_URL</code> or <code>http://127.0.0.1:18943/frame</code>.</td></tr>
+<tr><td><code>--interval</code></td><td>Capture-attempt interval; values below 1 second are clamped to 1 second.</td></tr>
+<tr><td><code>--source</code></td><td>Defaults to <code>screen</code>; may be a window title or X11 window ID.</td></tr>
+<tr><td><code>--width</code>, <code>-w</code></td><td>Capture width; default <code>768</code>.</td></tr>
+<tr><td><code>--height</code></td><td>Intended capture height; default <code>768</code>. The current <code>-h</code> alias conflicts with argparse help.</td></tr>
+<tr><td><code>--min-change</code></td><td>Hamming-distance threshold; default <code>2</code>. The advertised <code>0–64</code> range is not currently enforced.</td></tr>
+<tr><td><code>--stddev-min</code></td><td>Minimum 8×8 pixel standard deviation; default <code>0</code>, which disables uniform-frame rejection. The advertised <code>0–255</code> range is not currently enforced.</td></tr>
+<tr><td><code>--no-content-filter</code></td><td>Disables hash and standard-deviation filtering.</td></tr>
+<tr><td><code>--source-label</code></td><td>Added to the request as the URL-encoded <code>source</code> query parameter, not an HTTP header. Defaults to <code>--source</code>.</td></tr>
+<tr><td><code>--force</code></td><td>Adds <code>force=true</code>, bypassing the bridge's recent-audio gate.</td></tr>
+<tr><td><code>--once</code></td><td>Performs one capture attempt and exits; filtering can skip delivery.</td></tr>
+</tbody>
+</table>
+
+<h2>Filtering pipeline</h2>
+
+<p>When filtering is enabled, the script:</p>
+
+<ol>
+<li>captures an 8×8 grayscale thumbnail as exactly 64 raw bytes;</li>
+<li>computes an average hash and pixel standard deviation;</li>
+<li>skips the frame when it is below the configured content/change thresholds;</li>
+<li>captures the full JPEG only after the thumbnail passes;</li>
+<li>submits the JPEG to <code>/frame</code>.</li>
+</ol>
+
+<p>The script currently advances its remembered hash before full-frame capture or bridge acceptance, so that value means “last content selected for a send attempt,” not necessarily “last accepted frame.”</p>
+
+<h2>Validation required after repair</h2>
+
+<p>A reviewed fix should demonstrate all of the following on the exact commit:</p>
+
+<ul>
+<li><code>--help</code> and a one-shot parser invocation start successfully;</li>
+<li>the feeder and <code>voice_live_frame</code> attach the canonical secret without exposing it in arguments, output, or logs;</li>
+<li>missing and incorrect secrets return controlled <code>401</code> responses;</li>
+<li>a correct secret reaches normal <code>/frame</code> validation;</li>
+<li><code>source</code> and <code>force</code> query parameters remain encoded correctly;</li>
+<li>local loopback remains the default network boundary;</li>
+<li>tests use stubbed capture and HTTP paths and do not contact Gemini, Discord, Tailscale, or real displays.</li>
+</ul>
+
+<h2>See also</h2>
+
+<ul>
+<li><a href="quickstart.html">Quick start</a></li>
+<li><a href="architecture.html">Architecture</a></li>
+<li><a href="https://github.com/Capslockb/gemini-live-discord-bridge/issues/4">Issue #4</a> — sidecar and transcript privacy hardening</li>
+<li><a href="https://github.com/Capslockb/gemini-live-discord-bridge/issues/5">Issue #5</a> — mutating-route authentication repair</li>
+<li><a href="https://github.com/Capslockb/gemini-live-discord-bridge/issues/9">Issue #9</a> — frame-delivery and feeder repair</li>
+</ul>
 
 <div class="pager"><a class="prev" href="webhooks.html">
           <span class="label">Prev ←</span>
@@ -111,7 +181,7 @@ chmod +x ~/.hermes/scripts/video-frame-feeder.py</code></pre>
         </a></div>
 
       <div class="foot">
-        Hermes Live v0.3.4.2 · MIT · <a href="https://github.com/Capslockb/gemini-live-discord-bridge">github.com/Capslockb/gemini-live-discord-bridge</a>
+        Hermes Live v0.3.5 · License decision pending in <a href="https://github.com/Capslockb/gemini-live-discord-bridge/issues/7">Issue #7</a> · <a href="https://github.com/Capslockb/gemini-live-discord-bridge">github.com/Capslockb/gemini-live-discord-bridge</a>
       </div>
 
     </article>
