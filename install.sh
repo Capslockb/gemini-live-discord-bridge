@@ -192,8 +192,8 @@ if [ "$FROM_LOCAL" = 1 ]; then
     echo "  target: $SOURCE_DIR"
     LOCAL_LINK_EXISTS=1
   elif [ -e "$INSTALL_DIR" ]; then
-    echo "ERROR: $INSTALL_DIR already exists as a directory or file."
-    echo "  disposition: conflicting existing path (refused)"
+    echo "ERROR: $INSTALL_DIR conflicts with the requested --from-local link."
+    report_existing_install
     echo "       Refusing to delete or overwrite it. Move it aside or uninstall deliberately first."
     exit 1
   fi
