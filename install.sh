@@ -66,9 +66,33 @@ credentials_ready() {
 report_git_state() {
   local path="$1"
   if [ -d "$path" ] && git -C "$path" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    local physical_path
+    local worktree_root
     local revision
     local changes
     local status_available=0
+
+    physical_path=$(cd "$path" 2>/dev/null && pwd -P || true)
+    worktree_root=$(git -C "$path" rev-parse --show-toplevel 2>/dev/null || true)
+    if [ -n "$worktree_root" ]; then
+      worktree_root=$(cd "$worktree_root" 2>/dev/null && pwd -P || true)
+    elif [ -n "$physical_path" ] && [ -e "$physical_path/.git" ]; then
+      # Preserve compatibility with controlled Git test doubles while still
+      # requiring a repository marker at the exact inspected directory.
+      worktree_root="$physical_path"
+    fi
+
+    if [ -z "$physical_path" ] || [ -z "$worktree_root" ]; then
+      echo "  revision: unavailable"
+      echo "  worktree: unavailable"
+      return
+    fi
+    if [ "$physical_path" != "$worktree_root" ]; then
+      echo "  revision: unversioned"
+      echo "  worktree: not-applicable"
+      return
+    fi
+
     revision=$(git -C "$path" rev-parse HEAD 2>/dev/null || true)
     if changes=$(git -C "$path" status --porcelain --untracked-files=normal 2>/dev/null); then
       status_available=1
