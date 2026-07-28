@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Quick start — Hermes Live</title>
-<meta name="description" content="Five commands, two minutes. Install the bridge, restart the gateway, run /voice-live in Discord.">
+<meta name="description" content="Installation and first-session setup with current installer, security, privacy, and licensing warnings.">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -15,7 +15,7 @@
       <div class="brand-mark">H</div>
       <div>
         <div class="brand-text">Hermes Live</div>
-        <div class="brand-sub">v0.3.4 · VOPI build</div>
+        <div class="brand-sub">v0.3.5 · Gemini Live bridge</div>
       </div>
     </div>
 
@@ -29,7 +29,7 @@
       <a href="quickstart.html" class="active">Quick start</a>
       <a href="architecture.html">Architecture</a>
       <div class="nav-section">Core systems</div>
-      <a href="personality.html">Personality</a>
+      <a href="personality.html">Conversational behavior</a>
       <a href="fallback-chain.html">Fallback chain</a>
       <a href="notification.html">Notifications</a>
       <a href="email-brief.html">Email brief</a>
@@ -45,7 +45,7 @@
 
     <div class="sidebar-foot">
       <a href="https://github.com/Capslockb/gemini-live-discord-bridge">GitHub →</a><br>
-      MIT licensed · Hermes Agent plugin
+      License pending owner decision · <a href="https://github.com/Capslockb/gemini-live-discord-bridge/issues/7">Issue #7</a>
     </div>
   </aside>
 
@@ -55,15 +55,15 @@
       <span class="sep">/</span>
       <span>docs-site/</span>
       <div class="right">
-        <span class="pill good">v0.3.4.2</span>
-        <span class="pill warn">VOPI build</span>
+        <span class="pill good">v0.3.5</span>
+        <span class="pill warn">Gemini Live bridge</span>
       </div>
     </div>
 
     <article class="content">
 <h1>Quick start</h1>
 
-<p>Five commands, two minutes.</p>
+<p>Install the current Gemini Live Discord voice bridge into Hermes and start one live session.</p>
 
 <h2>Install</h2>
 
@@ -71,36 +71,49 @@
 git clone https://github.com/Capslockb/gemini-live-discord-bridge.git
 cd gemini-live-discord-bridge
 
-# 2. Install — prompts for DISCORD_BOT_TOKEN, GEMINI_API_KEY, your Discord user ID
+# 2. Fresh remote install — prompts for DISCORD_BOT_TOKEN and GEMINI_API_KEY
 ./install.sh
+
+# Development install from this exact working tree
+./install.sh --from-local
+
+# Skip credential prompts only; required values must already exist
+./install.sh --no-prompt
 
 # 3. Restart the gateway so the plugin loads
 systemctl --user restart hermes-gateway</code></pre>
 
+<p>A plain <code>./install.sh</code> clones into <code>${HERMES_HOME:-$HOME/.hermes}/plugins/discord-voice</code> only when that path does not already exist. On an existing installation it prints <code>skipping clone</code> and continues against the existing tree without fetching or checking its revision, so it is <strong>not an update command</strong>. <code>--no-prompt</code> only bypasses the prompts; it does not verify that the required credentials exist before reporting installation completion.</p>
+
+<p>On current <code>main</code>, <code>--from-local</code> is destructive to an existing plugin path: it removes an existing installation directory and replaces any existing install symlink before linking the current checkout. Back up local modifications and verify the target before using it. Draft <a href="https://github.com/Capslockb/gemini-live-discord-bridge/pull/22">PR #22</a> proposes the non-destructive contract accepted in <a href="https://github.com/Capslockb/gemini-live-discord-bridge/issues/11">Issue #11</a>.</p>
+
+<p>Current interactive credential writes do not preserve every secret value literally: <code>&amp;</code>, <code>|</code>, and backslashes can be altered by the installer's <code>sed</code> replacement path. Until <a href="https://github.com/Capslockb/gemini-live-discord-bridge/issues/23">Issue #23</a> is fixed, do not enter credentials containing those characters through the prompts. Populate <code>${HERMES_HOME:-$HOME/.hermes}/.env</code> through a trusted editor or secret-management path, keep its permissions restrictive, and then use <code>--no-prompt</code>. Never put real secrets in command-line arguments or shell history.</p>
+
+<p><code>HERMES_HOME</code> relocates the plugin directory, Hermes environment file, Python virtual environment lookup, and installed video feeder. It does <strong>not</strong> currently relocate the SFX directory: <code>install.sh</code> still copies sound files to <code>$HOME/.hermes/voice-users/sfx</code>, while the runtime honors <code>DISCORD_VOICE_LIVE_SFX_DIR</code>. For a custom Hermes root, set <code>DISCORD_VOICE_LIVE_SFX_DIR=&quot;$HERMES_HOME/voice-users/sfx&quot;</code> and populate that directory explicitly. See <a href="https://github.com/Capslockb/gemini-live-discord-bridge/issues/18">Issue #18</a> and <a href="sfx-library.html"><code>sfx-library.md</code></a>.</p>
+
+<h2>Minimum env</h2>
+
+<pre><code class="lang-bash">DISCORD_BOT_TOKEN=***
+GEMINI_API_KEY=***        # GOOGLE_API_KEY also works in code</code></pre>
+
+<p>Recommended for slash-command inference and user-presence handling:</p>
+
+<pre><code class="lang-bash">DISCORD_VOICE_LIVE_USER_ID=123456789012345678
+DISCORD_VOICE_LIVE_VOICE=Kore
+DISCORD_VOICE_LIVE_PORT=18943</code></pre>
+
+<p>Full env reference: <a href="env-vars.html"><code>env-vars.md</code></a>.</p>
+
 <h2>First session</h2>
 
-<p>From Discord, join a voice channel, then in any text channel:</p>
+<p>From Discord, join a voice channel, then run:</p>
 
-<pre><code class="lang-">/voice-live          # join
-/voice-live-leave    # leave</code></pre>
+<pre><code class="lang-text">/voice-live
+/voice-live-leave</code></pre>
 
-<p>That's it. The bridge will:</p>
+<p>The bridge will:</p>
 
-<ol><li>Connect to your voice channel (Discord CDN quirk: first attempt takes ~27s — this is normal, do not restart the gateway)</li><li>Handshake with Gemini Live</li><li>Play the <code>transition</code> sfx</li><li>Wait for you to speak — first turn is muted by design</li></ol>
-
-<h2>Verify</h2>
-
-<pre><code class="lang-bash">curl -s http://127.0.0.1:18943/health | python3 -m json.tool</code></pre>
-
-<p>You should see <code>&quot;voice_connected&quot;: true</code>, <code>&quot;running&quot;: true</code>, and a non-zero <code>audio_in_chunks</code> after you speak.</p>
-
-<h2>Common pitfalls</h2>
-
-<ul><li><strong>"Bridge failed to start"</strong> — wait ~30s. The first 5 voice WebSocket handshakes are rejected by the Discord CDN; the bridge retries.</li><li><strong>First-turn hallucination</strong> ("I see you're sharing your screen") — the system prompt has the guard, but if you see this, the audioStreamEnd mute is missing. Check <code>bridge.py</code> for <code>await self._gemini._ws.send(json.dumps({&quot;realtimeInput&quot;: {&quot;audioStreamEnd&quot;: True}}))</code> right after <code>connect()</code>.</li><li><strong>No audio in voice</strong> — check <code>~/.hermes/voice-users/sfx/</code> exists and the four WAV files are present.</li></ul>
-
-<h2>Next</h2>
-
-<ul><li><a href="architecture.html">Architecture</a> — understand the audio path and threading model.</li><li><a href="env-vars.html">Environment variables</a> — every <code>DISCORD_VOICE_LIVE_*</code> env var.</li><li><a href="troubleshooting.html">Troubleshooting</a> — what to do when it doesn't work.</li></ul>
+<ol><li>connect to your voice channel through <code>discord-ext-voice-recv</code>;</li><li>create the Discord RX sink and TX audio source;</li><li>open the Gemini Live WebSocket;</li><li>send the Gemini <code>setup</code> payload and wait for <code>setupComplete</code>;</li><li>stream audio in both directions until <code>/voice-live-leave</code> or idle hangup.</li></ol>
 
 <div class="pager"><a class="prev" href="index.html">
           <span class="label">Prev ←</span>
@@ -111,7 +124,7 @@ systemctl --user restart hermes-gateway</code></pre>
         </a></div>
 
       <div class="foot">
-        Hermes Live v0.3.4.2 · MIT · <a href="https://github.com/Capslockb/gemini-live-discord-bridge">github.com/Capslockb/gemini-live-discord-bridge</a>
+        Hermes Live v0.3.5 · License pending owner decision · <a href="https://github.com/Capslockb/gemini-live-discord-bridge/issues/7">Issue #7</a> · <a href="https://github.com/Capslockb/gemini-live-discord-bridge">github.com/Capslockb/gemini-live-discord-bridge</a>
       </div>
 
     </article>
