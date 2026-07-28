@@ -166,20 +166,14 @@ echo "  INSTALL_DIR:  $INSTALL_DIR"
 echo "  Python venv:  $PYTHON_BIN"
 echo
 
-if [ ! -x "$PYTHON_BIN" ]; then
-  echo "ERROR: Hermes Python venv not found at $PYTHON_BIN"
-  echo "       Is Hermes installed? Expected layout:"
-  echo "         $HERMES_HOME/hermes-agent/venv/bin/python"
-  exit 1
-fi
-
 INSTALL_REVISION="unknown"
 INSTALL_DISPOSITION=""
 LOCAL_LINK_EXISTS=0
 SOURCE_DIR=""
 
-# Inspect existing paths before credential checks or filesystem mutation so
-# every rerun reports its exact disposition and preserves local work.
+# Inspect existing paths before credential checks, runtime prerequisites, or
+# filesystem mutation so every rerun reports its exact disposition and
+# preserves local work even when the Hermes venv is absent or broken.
 if [ "$FROM_LOCAL" = 1 ]; then
   SOURCE_DIR=$(pwd -P)
   echo ">> Using current directory as plugin source"
@@ -211,6 +205,13 @@ else
     echo "       Use --from-local from the intended checkout, or move/uninstall the existing path deliberately."
     exit 1
   fi
+fi
+
+if [ ! -x "$PYTHON_BIN" ]; then
+  echo "ERROR: Hermes Python venv not found at $PYTHON_BIN"
+  echo "       Is Hermes installed? Expected layout:"
+  echo "         $HERMES_HOME/hermes-agent/venv/bin/python"
+  exit 1
 fi
 
 if [ "$NO_PROMPT" = 1 ]; then
