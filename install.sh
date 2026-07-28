@@ -63,51 +63,70 @@ credentials_ready() {
     { has_config_value GEMINI_API_KEY || has_config_value GOOGLE_API_KEY; }
 }
 
+resolve_exact_git_revision() {
+  local path="$1"
+  local physical_path
+  local worktree_root
+  local revision
+
+  if [ ! -d "$path" ] || ! git -C "$path" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    echo "unversioned"
+    return
+  fi
+
+  physical_path=$(cd "$path" 2>/dev/null && pwd -P || true)
+  worktree_root=$(git -C "$path" rev-parse --show-toplevel 2>/dev/null || true)
+  if [ -n "$worktree_root" ]; then
+    worktree_root=$(cd "$worktree_root" 2>/dev/null && pwd -P || true)
+  elif [ -n "$physical_path" ] && [ -e "$physical_path/.git" ]; then
+    # Preserve compatibility with controlled Git test doubles while still
+    # requiring a repository marker at the exact inspected directory.
+    worktree_root="$physical_path"
+  fi
+
+  if [ -z "$physical_path" ] || [ -z "$worktree_root" ]; then
+    echo "unavailable"
+    return
+  fi
+  if [ "$physical_path" != "$worktree_root" ]; then
+    echo "unversioned"
+    return
+  fi
+
+  revision=$(git -C "$path" rev-parse HEAD 2>/dev/null || true)
+  echo "${revision:-unknown}"
+}
+
 report_git_state() {
   local path="$1"
-  if [ -d "$path" ] && git -C "$path" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    local physical_path
-    local worktree_root
-    local revision
-    local changes
-    local status_available=0
+  local revision
+  local changes
+  local status_available=0
 
-    physical_path=$(cd "$path" 2>/dev/null && pwd -P || true)
-    worktree_root=$(git -C "$path" rev-parse --show-toplevel 2>/dev/null || true)
-    if [ -n "$worktree_root" ]; then
-      worktree_root=$(cd "$worktree_root" 2>/dev/null && pwd -P || true)
-    elif [ -n "$physical_path" ] && [ -e "$physical_path/.git" ]; then
-      # Preserve compatibility with controlled Git test doubles while still
-      # requiring a repository marker at the exact inspected directory.
-      worktree_root="$physical_path"
-    fi
-
-    if [ -z "$physical_path" ] || [ -z "$worktree_root" ]; then
+  revision=$(resolve_exact_git_revision "$path")
+  case "$revision" in
+    unavailable)
       echo "  revision: unavailable"
       echo "  worktree: unavailable"
       return
-    fi
-    if [ "$physical_path" != "$worktree_root" ]; then
+      ;;
+    unversioned)
       echo "  revision: unversioned"
       echo "  worktree: not-applicable"
       return
-    fi
+      ;;
+  esac
 
-    revision=$(git -C "$path" rev-parse HEAD 2>/dev/null || true)
-    if changes=$(git -C "$path" status --porcelain --untracked-files=normal 2>/dev/null); then
-      status_available=1
-    fi
-    echo "  revision: ${revision:-unknown}"
-    if [ "$status_available" -ne 1 ]; then
-      echo "  worktree: unavailable"
-    elif [ -n "$changes" ]; then
-      echo "  worktree: modified"
-    else
-      echo "  worktree: clean"
-    fi
+  if changes=$(git -C "$path" status --porcelain --untracked-files=normal 2>/dev/null); then
+    status_available=1
+  fi
+  echo "  revision: $revision"
+  if [ "$status_available" -ne 1 ]; then
+    echo "  worktree: unavailable"
+  elif [ -n "$changes" ]; then
+    echo "  worktree: modified"
   else
-    echo "  revision: unversioned"
-    echo "  worktree: not-applicable"
+    echo "  worktree: clean"
   fi
 }
 
@@ -270,7 +289,12 @@ if [ "$FROM_LOCAL" = 1 ]; then
     echo "  linked $SOURCE_DIR -> $INSTALL_DIR"
     INSTALL_DISPOSITION="new local link"
   fi
-  INSTALL_REVISION=$(git -C "$SOURCE_DIR" rev-parse HEAD 2>/dev/null || echo local-unversioned)
+  SOURCE_REVISION=$(resolve_exact_git_revision "$SOURCE_DIR")
+  case "$SOURCE_REVISION" in
+    unversioned) INSTALL_REVISION="local-unversioned" ;;
+    unavailable) INSTALL_REVISION="unknown" ;;
+    *) INSTALL_REVISION="$SOURCE_REVISION" ;;
+  esac
 else
   echo ">> Cloning $REPO_URL -> $INSTALL_DIR"
   git clone "$REPO_URL" "$INSTALL_DIR"
