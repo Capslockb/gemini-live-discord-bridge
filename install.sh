@@ -182,9 +182,10 @@ if [ "$FROM_LOCAL" = 1 ]; then
     exit 1
   fi
   if [ -L "$INSTALL_DIR" ]; then
-    existing_target=$(readlink -f "$INSTALL_DIR" 2>/dev/null || readlink "$INSTALL_DIR" 2>/dev/null || true)
-    if [ "$existing_target" != "$SOURCE_DIR" ]; then
-      echo "ERROR: $INSTALL_DIR already points to ${existing_target:-an unknown target}."
+    existing_target=$(readlink -f "$INSTALL_DIR" 2>/dev/null || true)
+    if [ -z "$existing_target" ] || [ "$existing_target" != "$SOURCE_DIR" ]; then
+      echo "ERROR: $INSTALL_DIR conflicts with the requested --from-local link."
+      report_existing_install
       echo "       Refusing to replace it. Remove it deliberately before retrying --from-local."
       exit 1
     fi
