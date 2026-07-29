@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Troubleshooting — Hermes Live</title>
-<meta name="description" content="Common bridge failures and how to fix them: bridge won&#x27;t start, interrupts lag, sfx not playing, email brief fails.">
+<meta name="description" content="Current troubleshooting guidance for bridge startup, sidecar safety, video, notifications, email briefs, paths, and logs.">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -15,7 +15,7 @@
       <div class="brand-mark">H</div>
       <div>
         <div class="brand-text">Hermes Live</div>
-        <div class="brand-sub">v0.3.4 · VOPI build</div>
+        <div class="brand-sub">v0.3.5</div>
       </div>
     </div>
 
@@ -29,7 +29,7 @@
       <a href="quickstart.html">Quick start</a>
       <a href="architecture.html">Architecture</a>
       <div class="nav-section">Core systems</div>
-      <a href="personality.html">Personality</a>
+      <a href="personality.html">Conversational behavior</a>
       <a href="fallback-chain.html">Fallback chain</a>
       <a href="notification.html">Notifications</a>
       <a href="email-brief.html">Email brief</a>
@@ -45,7 +45,7 @@
 
     <div class="sidebar-foot">
       <a href="https://github.com/Capslockb/gemini-live-discord-bridge">GitHub →</a><br>
-      MIT licensed · Hermes Agent plugin
+      License selection pending · <a href="https://github.com/Capslockb/gemini-live-discord-bridge/issues/7">Issue #7</a>
     </div>
   </aside>
 
@@ -55,86 +55,101 @@
       <span class="sep">/</span>
       <span>docs-site/</span>
       <div class="right">
-        <span class="pill good">v0.3.4.2</span>
-        <span class="pill warn">VOPI build</span>
+        <span class="pill good">v0.3.5</span>
+        <span class="pill warn">Current-main limits apply</span>
       </div>
     </div>
 
     <article class="content">
 <h1>Troubleshooting</h1>
 
-<p>Common bridge failures and how to fix them.</p>
+<p>Use this page with the current repository issues. Several advertised paths remain intentionally documented as blocked or limited until their runtime and security fixes are reviewed on an exact commit.</p>
 
-<h2>"Bridge failed to start"</h2>
+<h2><code>/voice-live</code> cannot infer a safe voice channel</h2>
 
-<p>Most common cause: <strong>Discord CDN handshake quirk</strong> (criterion #38, see <code>AGENTS.md</code>). The voice WebSocket endpoint rejects the first 5 handshakes with code 4006 before accepting. A single <code>channel.connect()</code> takes ~27 seconds of internal retries.</p>
+<p>Set <code>DISCORD_VOICE_LIVE_USER_ID</code> explicitly, or supply both <code>guild_id</code> and <code>channel_id</code> from a trusted caller. Current runtime otherwise retains a deployment-specific fallback that is unsafe for reused or multi-user installations. See <a href="https://github.com/Capslockb/gemini-live-discord-bridge/issues/16">Issue #16</a>.</p>
 
-<p><strong>Do not</strong> restart the gateway repeatedly to "retry" — each restart resets the retry clock and you'll hit the rate limit harder.</p>
+<pre><code>grep '^DISCORD_VOICE_LIVE_USER_ID=' "${HERMES_HOME:-$HOME/.hermes}/.env"</code></pre>
 
-<p><strong>What to do</strong>: wait ~30 seconds. The bridge will connect on its own.</p>
+<h2>Bridge seems slow to start</h2>
 
-<h2>"Bridge still starting" hangs on <code>/voice-live</code></h2>
+<p>Let one connection cycle finish. Repeated gateway restarts reset retries and can worsen rate limiting.</p>
 
-<p>If a previous bridge is in <code>_active_bridges</code> but <code>vc.is_connected()</code> is False, the new <code>/voice-live</code> will hang with "Bridge still starting" instead of starting fresh.</p>
+<pre><code>journalctl --user -u hermes-gateway -f</code></pre>
 
-<p><strong>Fix</strong>: the <code>_<em>init</em>_.py:voice_live()</code> handler should detect stale entries (vc disconnected) and pop them. If you see this hang in production, restart the gateway (<code>systemctl --user restart hermes-gateway</code>) and the cleanup will run on boot.</p>
+<p>Useful log markers include <code>VoiceLive: connecting</code>, the loopback control listener, Gemini setup completion, and <code>VoiceLive: bridge active</code>. Do not rely on fixed retry counts or timing as a compatibility guarantee.</p>
 
-<h2>First-turn "I see you're sharing your screen" hallucination</h2>
+<h2>Health check says not started</h2>
 
-<p>Two root causes (criterion #34):</p>
-<ol><li>The system prompt told the model "if someone shares their screen..." — Gemini hallucinated this as an implied task on every connect.</li><li>The first-turn mute (<code>audioStreamEnd</code> after setup) wasn't being sent.</li></ol>
+<pre><code>curl -s http://127.0.0.1:18943/health | python3 -m json.tool</code></pre>
 
-<p><strong>Verify the fix is in</strong>: <code>bridge.py</code> should have an <code>await self._gemini._ws.send(json.dumps({&quot;realtimeInput&quot;: {&quot;audioStreamEnd&quot;: True}}))</code> right after <code>await self._gemini.connect()</code>.</p>
+<p>If the sidecar is unavailable, the bridge is not running or the configured port differs. A <code>not_started</code> response means the HTTP server is reachable but no active bridge object is registered.</p>
 
-<h2>Token burn on connect</h2>
+<h2>Mutating sidecar routes are blocked on current <code>main</code></h2>
 
-<p>The bridge sends <code>setupComplete</code> → <code>audioStreamEnd</code> immediately to prevent the model from starting a first autonomous turn. If you see logs showing model output within 100ms of <code>setupComplete</code>, the audioStreamEnd is not being sent or the model is generating despite it.</p>
+<p>Authentication for <code>/stop</code>, <code>/say</code>, <code>/frame</code>, and <code>/notify</code> currently fails before a controlled authorization response. Do not use or expose those routes while <a href="https://github.com/Capslockb/gemini-live-discord-bridge/issues/5">Issue #5</a> remains open.</p>
 
-<p><strong>Check</strong>: <code>journalctl --user -u hermes-gateway -n 50 --no-pager | grep setupComplete</code></p>
+<p><code>/health</code> is anonymous. <code>/notes</code> is also unauthenticated and returns private transcript events plus the backing notes-file path. Keep the sidecar bound to loopback; do not proxy or browser-expose it while the privacy and control-API findings in <a href="https://github.com/Capslockb/gemini-live-discord-bridge/issues/4">Issue #4</a> remain open.</p>
 
-<h2>Voice CDN rate limit (4006 after 5 attempts)</h2>
+<h2>Video frames are not delivered</h2>
 
-<p>A long-running session can hit the rate limit. The bridge handles it by waiting up to 60s for <code>secret_key</code> readiness. If it still fails, the gateway returns an error. Wait 5-10 minutes before retrying.</p>
+<p>Frame delivery is blocked by the sidecar authentication defect, missing client authentication headers, feeder argument parsing, and secret-file-path mismatches. Treat the feature as unavailable until <a href="https://github.com/Capslockb/gemini-live-discord-bridge/issues/9">Issue #9</a> is resolved and exact-head tests cover both built-in and external clients.</p>
+
+<h2>Gemini setup fails for every model</h2>
+
+<p>Check the API key, selected model, and fallback list without printing secret values:</p>
+
+<pre><code>grep -E '^(GEMINI_API_KEY|GOOGLE_API_KEY|GEMINI_MODEL|GEMINI_LIVE_MODEL_FALLBACKS)=' "${HERMES_HOME:-$HOME/.hermes}/.env"
+journalctl --user -u hermes-gateway -n 100 --no-pager | grep -i 'Gemini Live model\|Gemini connect failed\|setup'</code></pre>
+
+<h2>No inbound audio reaches Gemini</h2>
+
+<p>Inspect <code>/health</code> for an active voice connection, receiving state, decoded-frame counters, and increasing input chunks while speaking. Common causes include a missing receive extension, speaker filtering, bot-speaker filtering, or speech below the local energy gate.</p>
+
+<h2>Audio output is late or talks over the user</h2>
+
+<p>Check interruption and output-buffer settings in <a href="env-vars.html">Environment variables</a>. Review health counters and logs before changing multiple timing values at once. Audio-path changes are runtime-sensitive and require normal review.</p>
 
 <h2>Tool calls hang</h2>
 
-<p><code>_run_local_tool</code> runs in a thread-pool. Long-running tools (delegation, web search) should return control immediately and let the user poll for status. If a tool blocks the worker thread, <strong>all</strong> subsequent tool calls queue up.</p>
+<p>Blocking handlers can queue later calls. Inspect the gateway journal for the specific tool and avoid assuming that a submitted external task completed successfully merely because the bridge accepted the request.</p>
 
-<p><strong>Watch for</strong>: tools that don't return a <code>dict</code> within 30 seconds. They might be stuck on a network call. Check <code>journalctl --user -u hermes-gateway -n 20 --no-pager</code> for the traceback.</p>
+<pre><code>journalctl --user -u hermes-gateway -n 100 --no-pager | grep -i 'tool call\|local_\|opencode_'</code></pre>
 
-<h2>Fallback chain always picks opencode</h2>
+<h2>Fallback selection is not portable</h2>
 
-<p><code>FALLBACK_CHAIN[&quot;codex&quot;]</code> is <code>[&quot;opencode&quot;, &quot;hermes-api&quot;, &quot;gemini&quot;]</code> — opencode is the first fallback by design. If you want codex to fall back to a different neighbor, edit <code>delegation_agent.py:FALLBACK_CHAIN</code>.</p>
+<p>The current fallback implementation contains host-specific executable paths, and suggestion-time and execution-time eligibility checks are not fully aligned. Do not edit source paths as routine setup guidance. See <a href="fallback-chain.html">Fallback chain</a> and <a href="https://github.com/Capslockb/gemini-live-discord-bridge/issues/8">Issue #8</a>.</p>
 
-<p><strong>Verify the health registry is working</strong>: call <code>local_delegate_health(action=&quot;list&quot;)</code> from voice or <code>~/.hermes/voice-platform-health.json</code> from the shell. If a platform is in there with <code>seconds_remaining &gt; 0</code>, it's still considered broken.</p>
+<h2>Email brief looks empty after backend failure</h2>
 
-<h2>Sfx not playing</h2>
+<p>Current backend failure can be represented like a successful empty inbox. Delivery failures can also produce misleading notification and de-duplication state, and recipient fallback can route sensitive sender or subject data incorrectly. Do not treat an empty brief as proof of backend health; keep scheduled delivery disabled until the destination and privacy boundary are verified. See <a href="email-brief.html">Email brief</a> and <a href="https://github.com/Capslockb/gemini-live-discord-bridge/issues/10">Issue #10</a>.</p>
 
-<ol><li>Check the WAV files exist: <code>ls -la ~/.hermes/voice-users/sfx/</code></li><li>Check the volumes: <code>DISCORD_VOICE_LIVE_SFX_&lt;SLOT&gt;_VOLUME=0.5</code> (default)</li><li>Test manually: <code>local_sfx_test(action=&quot;list&quot;)</code> returns the configured slots</li><li>Test playback: <code>local_sfx_test(slot=&quot;notification&quot;)</code> — should return <code>status: &quot;played&quot;</code>. If <code>no_active_source</code>, no voice session is running.</li></ol>
+<h2>Notification was not delivered</h2>
 
-<p>If the sfx is loaded but inaudible, the source's audio queue might be stuck. Restart the gateway to reset.</p>
+<p>The built-in <code>/notify</code> client does not currently satisfy the sidecar authentication boundary. Scheduled notification state also remains under <code>$HOME/.hermes</code> rather than following a custom <code>HERMES_HOME</code>. See <a href="notification.html">Notifications</a>, <a href="https://github.com/Capslockb/gemini-live-discord-bridge/issues/5">Issue #5</a>, and <a href="https://github.com/Capslockb/gemini-live-discord-bridge/issues/20">Issue #20</a>.</p>
 
-<h2>Email brief returns "no backend"</h2>
+<h2>Custom <code>HERMES_HOME</code> still writes elsewhere</h2>
 
-<p>Both backends (<code>google_api.py</code> and <code>himalaya</code>) failed. Common causes:</p>
-<ul><li><code>google_api.py</code> not authenticated: run <code>python ~/.hermes/hermes-agent/skills/productivity/google-workspace/scripts/google_api.py auth</code></li><li><code>himalaya</code> not configured: check <code>~/.config/himalaya/config.toml</code></li></ul>
+<p>Some runtime state does not yet follow the installation root. SFX paths, scheduled notification state, and the Google Workspace helper lookup have separate open corrections in <a href="https://github.com/Capslockb/gemini-live-discord-bridge/issues/18">Issue #18</a>, <a href="https://github.com/Capslockb/gemini-live-discord-bridge/issues/20">Issue #20</a>, and <a href="https://github.com/Capslockb/gemini-live-discord-bridge/issues/21">Issue #21</a>. Do not move or delete legacy state until both old and new locations are inspected.</p>
 
-<p>The brief is <strong>graceful</strong> when both fail — returns <code>{status: &quot;ok&quot;, backend: &quot;none&quot;, count: 0}</code> instead of crashing.</p>
+<h2>Installer rerun or unattended setup is misleading</h2>
 
-<h2>Notification not delivered</h2>
+<p>A normal rerun is not a verified update, and <code>--no-prompt</code> does not provide a complete deterministic install contract on current <code>main</code>. The interactive credential writer can also corrupt some special-character values. Back up local changes and inspect the target before using <code>--from-local</code>. See <a href="quickstart.html">Quick start</a>, <a href="https://github.com/Capslockb/gemini-live-discord-bridge/issues/11">Issue #11</a>, and <a href="https://github.com/Capslockb/gemini-live-discord-bridge/issues/23">Issue #23</a>.</p>
 
-<p><code>local_notify</code> returns <code>{status, channel, results, notified_at}</code>. Check <code>channel</code>:</p>
-<ul><li><code>voice</code> — the model will speak it in the next turn</li><li><code>dm</code> — sent via bot DM</li><li><code>channel</code> — posted in a text channel</li><li><code>webhook</code> — fired a webhook event</li><li><code>no_subscribers</code> — no webhook URL configured for <code>agent.notify</code></li></ul>
+<h2>SFX is missing or silent</h2>
 
-<p>If <code>channel: &quot;no_subscribers&quot;</code> and you expected a DM, the bot might not share a guild with the target user. Verify the bot is in the same server.</p>
+<p>Confirm the configured SFX directory and active voice session. A custom <code>HERMES_HOME</code> does not yet relocate SFX consistently, and bundled clip redistribution rights remain unverified. See <a href="sfx-library.html">SFX library</a>, <a href="sfx-credits.html">SFX credits</a>, <a href="https://github.com/Capslockb/gemini-live-discord-bridge/issues/18">Issue #18</a>, and <a href="https://github.com/Capslockb/gemini-live-discord-bridge/issues/12">Issue #12</a>.</p>
 
-<h2>Log locations</h2>
+<h2>Log and private-data locations</h2>
 
-<ul><li><strong>Gateway</strong>: <code>journalctl --user -u hermes-gateway -f</code> or <code>~/.hermes/logs/gateway.log</code></li><li><strong>Plugin</strong>: same journalctl, with <code>VoiceLive:</code> prefix in messages</li><li><strong>Errors</strong>: <code>~/.hermes/logs/errors.log</code></li><li><strong>Opencode tmux logs</strong>: <code>/tmp/delegate-&lt;platform&gt;-&lt;timestamp&gt;.log</code></li></ul>
-
-<h2>Voice bridges down after gateway restart</h2>
-
-<p>Voice bridges (ports 18943 and 9232) are consistently down after gateway restart. The gateway needs to bind the sockets, then ~30s for the Discord CDN handshake. Don't restart repeatedly — let one connect cycle complete.</p>
+<ul>
+<li><strong>Gateway:</strong> <code>journalctl --user -u hermes-gateway -f</code></li>
+<li><strong>Hermes logs:</strong> <code>${HERMES_HOME:-$HOME/.hermes}/logs/</code></li>
+<li><strong>Bridge notes/transcripts:</strong> <code>$HOME/.hermes/voice-live-notes/</code> by current default; treat as private conversation data</li>
+<li><strong>Scheduled notifications:</strong> <code>$HOME/.hermes/voice-scheduled-notifications.jsonl</code> on current <code>main</code></li>
+<li><strong>SFX:</strong> <code>$HOME/.hermes/voice-users/sfx/</code> on current <code>main</code></li>
+<li><strong>Control secret:</strong> <code>$HOME/.hermes/voice-live-control-secret</code> by runtime default</li>
+</ul>
 
 <div class="pager"><a class="prev" href="env-vars.html">
           <span class="label">Prev ←</span>
@@ -145,7 +160,7 @@
         </a></div>
 
       <div class="foot">
-        Hermes Live v0.3.4.2 · MIT · <a href="https://github.com/Capslockb/gemini-live-discord-bridge">github.com/Capslockb/gemini-live-discord-bridge</a>
+        Hermes Live v0.3.5 · license selection pending in <a href="https://github.com/Capslockb/gemini-live-discord-bridge/issues/7">Issue #7</a> · <a href="https://github.com/Capslockb/gemini-live-discord-bridge">repository</a>
       </div>
 
     </article>
