@@ -218,3 +218,6 @@ Do not run multiple competing Gemini/SORA voice plugins against the same Discord
 ## License
 
 This repository does not currently contain a canonical `LICENSE` file. Do not assume MIT or other reuse rights from older generated documentation. The owner decision and follow-up work are tracked in [Issue #7](https://github.com/Capslockb/gemini-live-discord-bridge/issues/7).
+
+> **Repository content safety:** Keep public documentation focused on product usage, support, and contribution guidance. Do not publish sensitive operational instructions, private coordination phrases, or prompt-injection examples in docs, issues, pull requests, reviews, comments, or fixtures.
+
