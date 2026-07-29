@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>SFX library — Hermes Live</title>
-<meta name="description" content="Four-slot UI sound effects library: tool-init, error, notification, transition. Env-driven, lazy PCM cache.">
+<meta name="description" content="Slot-based voice-session sound effects, runtime configuration, path limitations, and media-rights status.">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -15,7 +15,7 @@
       <div class="brand-mark">H</div>
       <div>
         <div class="brand-text">Hermes Live</div>
-        <div class="brand-sub">v0.3.4 · VOPI build</div>
+        <div class="brand-sub">v0.3.5 · Gemini Live</div>
       </div>
     </div>
 
@@ -29,7 +29,7 @@
       <a href="quickstart.html">Quick start</a>
       <a href="architecture.html">Architecture</a>
       <div class="nav-section">Core systems</div>
-      <a href="personality.html">Personality</a>
+      <a href="personality.html">Conversational behavior</a>
       <a href="fallback-chain.html">Fallback chain</a>
       <a href="notification.html">Notifications</a>
       <a href="email-brief.html">Email brief</a>
@@ -45,60 +45,58 @@
 
     <div class="sidebar-foot">
       <a href="https://github.com/Capslockb/gemini-live-discord-bridge">GitHub →</a><br>
-      MIT licensed · Hermes Agent plugin
+      License selection pending · <a href="https://github.com/Capslockb/gemini-live-discord-bridge/issues/7">Issue #7</a>
     </div>
   </aside>
 
   <main class="main">
     <div class="topbar">
-      <span class="crumb">Sfx Library</span>
+      <span class="crumb">SFX library</span>
       <span class="sep">/</span>
       <span>docs-site/</span>
       <div class="right">
-        <span class="pill good">v0.3.4.2</span>
-        <span class="pill warn">VOPI build</span>
+        <span class="pill good">v0.3.5</span>
+        <span class="pill warn">Media rights unverified</span>
       </div>
     </div>
 
     <article class="content">
 <h1>SFX library — multi-slot UI sound effects</h1>
 
-<p>A small slot-based system for playing UI sound effects into the active voice session. Each slot maps to a 24kHz mono PCM16 WAV file and fires on a specific bridge event.</p>
+<p>The bridge can play small slot-based sound effects into an active voice session. Each slot resolves a WAV file, converts supported input to 24 kHz mono PCM16, and fires on a specific bridge event.</p>
 
 <h2>The four slots</h2>
 
-<table><thead><tr><th>Slot</th><th>Triggered by</th><th>Typical sound</th></tr></thead><tbody><tr><td><code>tool_init</code></td><td>First tool call of a session (one-shot per session)</td><td>Soft chime — "I'm ready to work"</td></tr><tr><td><code>error</code></td><td>Uncaught exception in <code>_run_local_tool</code></td><td>Sharp beep — "something went wrong"</td></tr><tr><td><code>notification</code></td><td>Successful <code>local_notify</code> delivery (incl. email brief)</td><td>Light ping — "you have a message"</td></tr><tr><td><code>transition</code></td><td>Session start (after <code>vc.play()</code> succeeds)</td><td>Pop/swoosh — "we're connected"</td></tr></tbody></table>
+<table><thead><tr><th>Slot</th><th>Triggered by</th><th>Typical role</th></tr></thead><tbody><tr><td><code>tool_init</code></td><td>First tool call of a session, once per session</td><td>Work-start cue</td></tr><tr><td><code>error</code></td><td>Uncaught exception in <code>_run_local_tool</code></td><td>Error cue</td></tr><tr><td><code>notification</code></td><td>Successful <code>local_notify</code> delivery</td><td>Message cue</td></tr><tr><td><code>transition</code></td><td>Session start after <code>vc.play()</code> succeeds</td><td>Connection cue</td></tr></tbody></table>
 
-<p>The <code>tool_init</code> sfx uses a one-shot guard (<code>_run_local_tool._tool_init_played</code>) so it doesn't replay on every tool call.</p>
+<p>The <code>tool_init</code> slot uses a one-shot guard so it does not replay for every tool call in the same session.</p>
 
-<h2>File layout</h2>
+<h2>File layout and current path boundary</h2>
 
-<p>Default directory: <code>~/.hermes/voice-users/sfx/</code></p>
+<p>The runtime default is <code>~/.hermes/voice-users/sfx/</code>:</p>
 
-<pre><code class="lang-">~/.hermes/voice-users/sfx/
-├── tool_init.wav       # chime (e.g. UI Notification Chimes Pack, first chime)
-├── error.wav           # 4x chain of a sharp beep (~2.8s total)
-├── notification.wav    # mobile-OS style ping
-└── transition.wav      # pop / whoosh</code></pre>
+<pre><code>~/.hermes/voice-users/sfx/
+├── tool_init.wav
+├── error.wav
+├── notification.wav
+└── transition.wav</code></pre>
 
-<p>All four files are <strong>24 kHz mono PCM16</strong>. The loader auto-resamples if you give it a different format, but cutting directly to the target format keeps the loader's resample path simple.</p>
+<p>On current <code>main</code>, this location is not derived from <code>HERMES_HOME</code>. The installer copies bundled files under <code>$HOME/.hermes/voice-users/sfx</code>, while the runtime independently uses the same home-relative default unless <code>DISCORD_VOICE_LIVE_SFX_DIR</code> is set.</p>
 
-<h2>Where the clips came from</h2>
+<p>For a custom Hermes root, set <code>DISCORD_VOICE_LIVE_SFX_DIR="$HERMES_HOME/voice-users/sfx"</code> explicitly and place approved WAV files there. Do not assume the installer populates that override. Path unification and migration behavior are tracked in <a href="https://github.com/Capslockb/gemini-live-discord-bridge/issues/18">Issue #18</a>.</p>
 
-<p>Cut from a YouTube playlist ("UI Sound Effects for App & Game Development" by Brand Name Audio) using <code>ffmpeg silencedetect=noise=-30dB:d=0.2</code>. See <code>silencedetect</code> log lines for the <code>silence_end</code> timestamps that anchor each cut.</p>
-
-<p>To re-cut or add new slots, see the recipe in <code>silence-detect-sfx-cutting</code> skill.</p>
+<div class="callout warn"><strong>Media-rights boundary:</strong> the repository includes WAV files whose provenance is recorded, but redistribution permission has not been verified. Use your own explicitly licensed files or disable SFX while <a href="https://github.com/Capslockb/gemini-live-discord-bridge/issues/12">Issue #12</a> remains open. The repository software-license decision in <a href="https://github.com/Capslockb/gemini-live-discord-bridge/issues/7">Issue #7</a> does not establish rights to third-party audio.</div>
 
 <h2>Environment variables</h2>
 
-<p>Per-slot override (path):</p>
+<p>Per-slot file override:</p>
 
 <pre><code class="lang-bash">DISCORD_VOICE_LIVE_SFX_TOOL_INIT=/path/to/custom_chime.wav
 DISCORD_VOICE_LIVE_SFX_ERROR=/path/to/custom_beep.wav
 DISCORD_VOICE_LIVE_SFX_NOTIFICATION=/path/to/custom_ping.wav
 DISCORD_VOICE_LIVE_SFX_TRANSITION=/path/to/custom_pop.wav</code></pre>
 
-<p>Per-slot volume (0.0 to 1.5, where 1.0 = no scaling):</p>
+<p>Per-slot volume is clamped by the runtime to <code>0.0</code> through <code>1.5</code>, where <code>1.0</code> means no scaling:</p>
 
 <pre><code class="lang-bash">DISCORD_VOICE_LIVE_SFX_TOOL_INIT_VOLUME=0.55
 DISCORD_VOICE_LIVE_SFX_ERROR_VOLUME=0.45
@@ -107,47 +105,35 @@ DISCORD_VOICE_LIVE_SFX_TRANSITION_VOLUME=0.60</code></pre>
 
 <p>Global enable:</p>
 
-<pre><code class="lang-bash">DISCORD_VOICE_LIVE_SFX_ENABLED=true    # default</code></pre>
+<pre><code class="lang-bash">DISCORD_VOICE_LIVE_SFX_ENABLED=true</code></pre>
 
-<p>Global SFX directory (overrides the default <code>~/.hermes/voice-users/sfx/</code>):</p>
+<p>Set this to <code>false</code> to prevent bundled or locally configured SFX from loading or playing.</p>
+
+<p>Global runtime directory override:</p>
 
 <pre><code class="lang-bash">DISCORD_VOICE_LIVE_SFX_DIR=/custom/sfx/dir</code></pre>
 
+<p>This override is read by <code>sfx.py</code>. Current <code>install.sh</code> still copies bundled files to <code>$HOME/.hermes/voice-users/sfx</code>.</p>
+
 <h2><code>local_sfx_test</code> tool</h2>
 
-<p>The agent can play any slot in the current voice session:</p>
+<p>The tool can play a configured slot in the active voice session or report slot configuration:</p>
 
-<pre><code class="lang-json">// play a slot
-{&quot;slot&quot;: &quot;notification&quot;}
+<pre><code class="lang-json">{"slot": "notification"}</code></pre>
 
-// inspect all configured slots
-{&quot;action&quot;: &quot;list&quot;}</code></pre>
+<pre><code class="lang-json">{"action": "list"}</code></pre>
 
-<p>Returns:</p>
-<pre><code class="lang-json">// play result
-{&quot;result&quot;: {&quot;status&quot;: &quot;played&quot;, &quot;slot&quot;: &quot;notification&quot;, &quot;bytes&quot;: 33600, &quot;duration_s&quot;: 0.7}}
+<p>A list result reports each slot's resolved path, existence, volume, and cached byte count. With no active voice source, playback returns <code>{"status": "no_active_source"}</code>. Missing or unsupported files return a controlled no-SFX result rather than failing the bridge.</p>
 
-// list result
-{&quot;result&quot;: {&quot;slots&quot;: {
-  &quot;tool_init&quot;:    {&quot;path&quot;: &quot;...&quot;, &quot;exists&quot;: true,  &quot;volume&quot;: 0.55, &quot;cached_bytes&quot;: 33600},
-  &quot;error&quot;:        {&quot;path&quot;: &quot;...&quot;, &quot;exists&quot;: true,  &quot;volume&quot;: 0.45, &quot;cached_bytes&quot;: 134400},
-  &quot;notification&quot;: {&quot;path&quot;: &quot;...&quot;, &quot;exists&quot;: true,  &quot;volume&quot;: 0.50, &quot;cached_bytes&quot;: 33600},
-  &quot;transition&quot;:   {&quot;path&quot;: &quot;...&quot;, &quot;exists&quot;: true,  &quot;volume&quot;: 0.60, &quot;cached_bytes&quot;: 33600}
-}}}</code></pre>
+<h2>Adding or replacing a slot</h2>
 
-<p>If no voice session is active, returns <code>{&quot;status&quot;: &quot;no_active_source&quot;}</code> — the sfx library is voice-only.</p>
+<ol><li>Place an explicitly licensed WAV in the configured SFX directory, or set the matching per-slot environment variable.</li><li>For a new slot name, add it to <code>DEFAULT_SFX_PATHS</code> and <code>DEFAULT_SFX_VOLUMES</code> in reviewed runtime code.</li><li>Call <code>play_sfx("&lt;slot&gt;")</code> from the reviewed bridge event.</li><li>Add the slot to the <code>local_sfx_test</code> declaration and runner behavior.</li><li>Restart the Hermes gateway after code or media changes.</li></ol>
 
-<h2>Adding a new slot</h2>
-
-<ol><li>Add a <code>sfx_&lt;slot&gt;.wav</code> file to the sfx dir</li><li>In <code>sfx.py</code>, add the slot name to <code>DEFAULT_SFX_PATHS</code> and <code>DEFAULT_SFX_VOLUMES</code></li><li>Call <code>play_sfx(&quot;&lt;slot&gt;&quot;)</code> from the bridge event you want it to fire on</li><li>Add the slot name to the <code>local_sfx_test</code> tool declaration enum</li></ol>
-
-<p>No need to restart the gateway for step 1 if the cache is invalidated, but steps 2-4 require a gateway restart.</p>
+<p>Adding or replacing repository media is an asset- and licensing-sensitive change. Do not infer third-party media rights from the eventual repository software license.</p>
 
 <h2>Cache invalidation</h2>
 
-<p>If you swap a WAV file but keep the same path, the in-memory cache still holds the old bytes. Two ways to invalidate:</p>
-
-<ul><li>Restart the gateway</li><li>Call <code>invalidate_cache()</code> (currently no public tool for this; add <code>local_sfx_invalidate</code> if needed)</li></ul>
+<p>The first successful load of a slot is cached in memory. Replacing a WAV at the same path does not replace the active cached bytes. Restart the Hermes gateway after replacing a file. There is no public cache-invalidation tool.</p>
 
 <div class="pager"><a class="prev" href="email-brief.html">
           <span class="label">Prev ←</span>
@@ -158,7 +144,7 @@ DISCORD_VOICE_LIVE_SFX_TRANSITION_VOLUME=0.60</code></pre>
         </a></div>
 
       <div class="foot">
-        Hermes Live v0.3.4.2 · MIT · <a href="https://github.com/Capslockb/gemini-live-discord-bridge">github.com/Capslockb/gemini-live-discord-bridge</a>
+        Hermes Live v0.3.5 · License selection pending in <a href="https://github.com/Capslockb/gemini-live-discord-bridge/issues/7">Issue #7</a> · <a href="https://github.com/Capslockb/gemini-live-discord-bridge">github.com/Capslockb/gemini-live-discord-bridge</a>
       </div>
 
     </article>
