@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Architecture — Hermes Live</title>
-<meta name="description" content="End-to-end audio path, threading model, and lifecycle of the Hermes Live Discord voice bridge.">
+<meta name="description" content="Operator-facing architecture and current security boundaries for the Hermes Live Discord voice bridge.">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -15,7 +15,7 @@
       <div class="brand-mark">H</div>
       <div>
         <div class="brand-text">Hermes Live</div>
-        <div class="brand-sub">v0.3.4 · VOPI build</div>
+        <div class="brand-sub">v0.3.5 · VOPI build</div>
       </div>
     </div>
 
@@ -29,7 +29,7 @@
       <a href="quickstart.html">Quick start</a>
       <a href="architecture.html" class="active">Architecture</a>
       <div class="nav-section">Core systems</div>
-      <a href="personality.html">Personality</a>
+      <a href="personality.html">Conversational behavior</a>
       <a href="fallback-chain.html">Fallback chain</a>
       <a href="notification.html">Notifications</a>
       <a href="email-brief.html">Email brief</a>
@@ -45,7 +45,7 @@
 
     <div class="sidebar-foot">
       <a href="https://github.com/Capslockb/gemini-live-discord-bridge">GitHub →</a><br>
-      MIT licensed · Hermes Agent plugin
+      License pending owner decision · Hermes Agent plugin
     </div>
   </aside>
 
@@ -55,62 +55,114 @@
       <span class="sep">/</span>
       <span>docs-site/</span>
       <div class="right">
-        <span class="pill good">v0.3.4.2</span>
-        <span class="pill warn">VOPI build</span>
+        <span class="pill good">v0.3.5</span>
+        <span class="pill warn">active review</span>
       </div>
     </div>
 
     <article class="content">
 <h1>Architecture</h1>
 
-<p>End-to-end audio path, threading model, and lifecycle of the Discord voice bridge.</p>
+<p>Operator-facing overview of the Discord audio path, Gemini Live session lifecycle, plugin boundary, and loopback sidecar. Review the open issues linked below before deploying the bridge or exposing any local integration.</p>
+
+<div class="callout">
+  <span class="ico">status</span>
+  <div>
+    <strong>Current capability boundary.</strong>
+    Core voice operation is under active development. Mutating sidecar routes remain unavailable under <a href="https://github.com/Capslockb/gemini-live-discord-bridge/issues/5">Issue #5</a>; frame delivery remains blocked under <a href="https://github.com/Capslockb/gemini-live-discord-bridge/issues/9">Issue #9</a>; and <code>/notes</code> exposes sensitive transcript/note data without authentication under <a href="https://github.com/Capslockb/gemini-live-discord-bridge/issues/4">Issue #4</a>.
+  </div>
+</div>
 
 <h2>Audio path</h2>
 
-<pre><code class="lang-">Discord Voice (Opus)
-    ↓  discord-ext-voice-recv decode
-48 kHz PCM stereo (16-bit)
-    ↓  VoiceListener._feed_audio
-16 kHz PCM mono  (24 kHz internally, then downsampled in GeminiLiveBridge)
-    ↓  WebSocket binary frame
-Gemini Multimodal Live API  (WSS)
-    ↓  WebSocket binary frame
-24 kHz PCM mono  (PCM16)
-    ↓  LiveAudioSource.feed
-48 kHz PCM stereo (upsample_for_discord)
-    ↓  discord.AudioSource
-Discord Voice (Opus encode)</code></pre>
+<pre><code>Discord voice channel
+    ↓ discord-ext-voice-recv decode
+48 kHz stereo PCM16
+    ↓ speech-energy and speaker filters
+16 kHz mono PCM16
+    ↓ Gemini Live realtime audio over WSS
+Gemini Live session
+    ↓ model audio output
+24 kHz mono PCM16
+    ↓ playback conversion
+48 kHz stereo PCM16
+    ↓ discord.AudioSource
+Discord voice playback</code></pre>
 
-<h2>Threading model</h2>
+<p>Discord input is downsampled to <strong>16 kHz mono</strong> before it is sent to Gemini. Gemini output is treated as <strong>24 kHz mono</strong> and converted to Discord's 48 kHz stereo playback format. Do not rely on fixed latency, reconnect timing, or handshake-attempt counts; validate those properties against the exact deployed revision and environment.</p>
 
-<p>The bridge runs <strong>three</strong> long-lived threads plus a small pool of timers.</p>
+<h2>Runtime boundaries</h2>
 
-<table><thead><tr><th>Thread</th><th>Owner</th><th>Purpose</th></tr></thead><tbody><tr><td><strong>Gateway event loop</strong></td><td><code>discord.py</code></td><td>Owns the bot, voice client, and all <code>LiveAudioSource</code> playback. Async.</td></tr><tr><td><strong>Gemini receive loop</strong></td><td><code>GeminiLiveBridge._ws_recv_loop</code></td><td>Reads WSS frames, dispatches audio / tool calls / transcripts. Runs <code>_run_in_executor</code> for any blocking work.</td></tr><tr><td><strong>Tool worker</strong></td><td><code>_run_local_tool</code> (module-level)</td><td>Synchronous; called from a thread-pool for each Gemini <code>toolCalls</code> event.</td></tr><tr><td><strong>Schedulers</strong></td><td><code>notification.start_scheduler</code>, <code>email_brief.start_brief_scheduler</code></td><td>Daemon threads, JSONL-polling, ~1-2s tick.</td></tr></tbody></table>
+<table>
+<thead><tr><th>Boundary</th><th>Purpose</th><th>Current status</th></tr></thead>
+<tbody>
+<tr><td>Hermes plugin entry</td><td>Registers the voice start, leave, status, frame, video-status, and notes surfaces.</td><td>Caller identity and deployment-specific fallback behavior require review under <a href="https://github.com/Capslockb/gemini-live-discord-bridge/issues/16">Issue #16</a> and <a href="https://github.com/Capslockb/gemini-live-discord-bridge/issues/17">Issue #17</a>.</td></tr>
+<tr><td>Discord voice bridge</td><td>Owns the voice client, PCM listener, playback source, watchdog, idle handling, and shutdown.</td><td>Validate audio, reconnect, and permission behavior on the exact deployed head.</td></tr>
+<tr><td>Gemini Live session</td><td>Owns setup, audio send/receive loops, transcripts, reconnect state, and configured tool calls.</td><td>Tool execution inherits host permissions. Prompt or conversational text is not an authorization boundary.</td></tr>
+<tr><td>Loopback sidecar</td><td>Provides local health, notes, stop, speech, frame, and notification routes.</td><td>Binds to <code>127.0.0.1</code> by default. Mutating routes are blocked by Issue #5; <code>/notes</code> is unauthenticated transcript data.</td></tr>
+<tr><td>Schedulers and integrations</td><td>Drive notifications, email briefs, webhooks, and optional local helpers.</td><td>Review delivery, recipient, privacy, credential, and path limitations before enabling them.</td></tr>
+</tbody>
+</table>
 
 <h2>Lifecycle</h2>
 
-<ol><li><strong>User runs <code>/voice-live</code> in Discord</strong></li><li><code>_<em>init</em>_.py:voice_live()</code> checks the user is in the target voice channel (user-presence gate, criterion #33). If not, it rejects with a "you're not in voice" message.</li><li>If a stale bridge is in <code>_active_bridges</code> (vc disconnected), it's cleaned up.</li><li>A new <code>VoiceLiveBridge</code> is created and <code>run()</code> is spawned as a background task.</li><li><code>VoiceLiveBridge.start()</code>:</li></ol>
-<ul><li>Calls <code>channel.connect()</code> (Discord CDN handshake quirk: first 5 attempts fail with code 4006; takes ~27s)</li><li>Creates <code>LiveAudioSource</code> (the audio-output queue)</li><li>Creates <code>GeminiLiveBridge</code> and registers it in <code>sfx.register_active_source</code> for cross-bridge sfx</li><li>Wires <code>vc.listen()</code> (RX) and <code>vc.play()</code> (TX)</li><li>Plays the <code>transition</code> sfx into the audio source</li><li>Calls <code>await gemini.connect()</code> (sends setup message, waits for <code>setupComplete</code>)</li><li>Sends <code>audioStreamEnd</code> immediately after <code>setupComplete</code> to mute first-turn</li><li>Returns</li></ul>
-<ol><li><strong>Connection watchdog</strong> polls <code>vc.is_connected()</code> and the user's voice-channel membership every 1s. If either fails, calls <code>stop()</code>.</li><li><strong>Auto-leave</strong> kicks in if <code>AUTO_LEAVE_QUIET_SECONDS</code> passes with no audio.</li><li><strong>User runs <code>/voice-live-leave</code></strong> → <code>_<em>init</em>_.py:voice_live_leave()</code> calls <code>bridge.stop()</code>.</li><li><code>stop()</code> cancels the recv loop, ends the WSS, disconnects from the voice channel, deletes the autostart file (if any).</li></ol>
+<ol>
+<li>A user starts a session through the Discord slash command or the configured Hermes tool.</li>
+<li>The plugin resolves the Discord adapter, guild, channel, and target speaker. Do not rely on an embedded account fallback; see Issue #16.</li>
+<li>The bridge connects to Discord voice, installs the PCM receive sink and playback source, and opens the Gemini Live WebSocket.</li>
+<li>Input audio is filtered and queued for Gemini; output audio is converted and queued for Discord playback.</li>
+<li>A watchdog observes connection state, target-user presence, idle prompting, and auto-leave conditions.</li>
+<li>A leave request, disconnect, target-user departure, or unrecoverable session failure stops the bridge and releases resources.</li>
+</ol>
 
-<h2>Key files</h2>
+<p>Sidecar <code>/stop</code> is intended to request the same shutdown but must be treated as unavailable until the authentication path and its clients are fixed and validated under Issue #5.</p>
 
-<table><thead><tr><th>File</th><th>Role</th></tr></thead><tbody><tr><td><code>_<em>init</em>_.py</code></td><td>Hermes plugin entry. Registers <code>/voice-live</code>, <code>/voice-live-leave</code>, autostart mechanism, video frame control.</td></tr><tr><td><code>bridge.py</code></td><td>Core. <code>VoiceLiveBridge</code>, <code>GeminiLiveBridge</code>, <code>LiveAudioSource</code>, audio I/O, all tool definitions, sidecar HTTP server.</td></tr><tr><td><code>notification.py</code></td><td>Multi-channel proactive notification dispatcher.</td></tr><tr><td><code>email_brief.py</code></td><td>Inbox digest (scheduled + on-demand).</td></tr><tr><td><code>sfx.py</code></td><td>Slot-based UI sound effects library.</td></tr><tr><td><code>delegation_agent.py</code></td><td>Multi-CLI delegation with health registry and fallback chain.</td></tr><tr><td><code>user_profiles.py</code></td><td>Per-user Honcho peer mapping, onboarding.</td></tr><tr><td><code>webhook_dispatcher.py</code></td><td>Event-class webhook fanout.</td></tr></tbody></table>
+<h2>Loopback sidecar</h2>
 
-<h2>Key env vars (full list in <code>env-vars.md</code>)</h2>
+<p>The sidecar binds to:</p>
 
-<ul><li><code>DISCORD_VOICE_LIVE_PORT=18943</code> — sidecar HTTP control port</li><li><code>DISCORD_VOICE_LIVE_USER_ID=&lt;b_snowflake&gt;</code> — who the bridge listens to</li><li><code>DISCORD_VOICE_LIVE_AUTO_LEAVE_QUIET_SECONDS=900</code> — idle timeout</li><li><code>DISCORD_VOICE_LIVE_VOICE=en-US-JennyNeural</code> — TTS voice</li><li><code>DISCORD_VOICE_LIVE_TYPING_SFX=~/.hermes/voice-live-typing.wav</code> — keyboard click sfx</li></ul>
+<pre><code>127.0.0.1:${DISCORD_VOICE_LIVE_PORT:-18943}</code></pre>
+
+<p>Read-only health is available at <code>GET /health</code>. <code>GET /notes?limit=N</code> returns recent transcript/note events and backing-path metadata without authentication. Keep the service on loopback and do not proxy it to another host, browser, shared network, or tunnel.</p>
+
+<p>The mutating routes <code>/stop</code>, <code>/say</code>, <code>/frame</code>, and <code>/notify</code> are intended to require <code>X-API-Secret</code>, but current <code>main</code> fails in the secret-comparison path. Built-in frame and notification clients also do not consistently attach the required header. Treat these routes as unavailable until exact-head server-to-client tests pass.</p>
+
+<h2>Operational review points</h2>
+
+<ul>
+<li><strong>Authentication and transcript privacy:</strong> Issues <a href="https://github.com/Capslockb/gemini-live-discord-bridge/issues/4">#4</a> and <a href="https://github.com/Capslockb/gemini-live-discord-bridge/issues/5">#5</a>.</li>
+<li><strong>Frame delivery:</strong> Issue <a href="https://github.com/Capslockb/gemini-live-discord-bridge/issues/9">#9</a>.</li>
+<li><strong>Email delivery and recipient routing:</strong> Issue <a href="https://github.com/Capslockb/gemini-live-discord-bridge/issues/10">#10</a>.</li>
+<li><strong>Deployment identity and owner authorization:</strong> Issues <a href="https://github.com/Capslockb/gemini-live-discord-bridge/issues/16">#16</a> and <a href="https://github.com/Capslockb/gemini-live-discord-bridge/issues/17">#17</a>.</li>
+<li><strong>Custom installation roots:</strong> Issues <a href="https://github.com/Capslockb/gemini-live-discord-bridge/issues/18">#18</a>, <a href="https://github.com/Capslockb/gemini-live-discord-bridge/issues/20">#20</a>, and <a href="https://github.com/Capslockb/gemini-live-discord-bridge/issues/21">#21</a>.</li>
+<li><strong>Repository and bundled-media rights:</strong> Issues <a href="https://github.com/Capslockb/gemini-live-discord-bridge/issues/7">#7</a> and <a href="https://github.com/Capslockb/gemini-live-discord-bridge/issues/12">#12</a>.</li>
+</ul>
+
+<h2>Key configuration</h2>
+
+<p>See <a href="env-vars.html">Environment variables</a> for the complete operator-facing list. Common values include:</p>
+
+<pre><code>DISCORD_BOT_TOKEN=***
+GEMINI_API_KEY=***
+GEMINI_MODEL=gemini-3.1-flash-live-preview
+DISCORD_VOICE_LIVE_VOICE=Kore
+DISCORD_VOICE_LIVE_PORT=18943
+DISCORD_VOICE_LIVE_ALLOWED_SPEAKERS=
+DISCORD_VOICE_LIVE_OUTPUT_PREROLL_MS=320
+GEMINI_AUDIO_STREAM_IDLE_END_SECONDS=0.25</code></pre>
+
+<p>Keep secrets out of logs, issue bodies, review comments, screenshots, generated documentation, and shell history. Custom <code>HERMES_HOME</code> currently does not relocate every state/helper path; review the linked path issues before using a non-default root.</p>
 
 <div class="pager"><a class="prev" href="quickstart.html">
           <span class="label">Prev ←</span>
           <span class="title">Quick start — Hermes Live</span>
         </a><a class="next" href="personality.html">
           <span class="label">Next →</span>
-          <span class="title">Personality — Hermes Live</span>
+          <span class="title">Conversational behavior — Hermes Live</span>
         </a></div>
 
       <div class="foot">
-        Hermes Live v0.3.4.2 · MIT · <a href="https://github.com/Capslockb/gemini-live-discord-bridge">github.com/Capslockb/gemini-live-discord-bridge</a>
+        Hermes Live v0.3.5 · License pending owner decision · <a href="https://github.com/Capslockb/gemini-live-discord-bridge/issues/7">Issue #7</a> · <a href="https://github.com/Capslockb/gemini-live-discord-bridge">github.com/Capslockb/gemini-live-discord-bridge</a>
       </div>
 
     </article>
