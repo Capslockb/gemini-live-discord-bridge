@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>SFX credits — Hermes Live</title>
-<meta name="description" content="Provenance and license of the default sfx clips bundled with Hermes Live.">
+<meta name="description" content="Recorded provenance and unresolved redistribution-rights status for the bundled sound-effect files.">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -15,7 +15,7 @@
       <div class="brand-mark">H</div>
       <div>
         <div class="brand-text">Hermes Live</div>
-        <div class="brand-sub">v0.3.4 · VOPI build</div>
+        <div class="brand-sub">v0.3.5 · VOPI build</div>
       </div>
     </div>
 
@@ -29,7 +29,7 @@
       <a href="quickstart.html">Quick start</a>
       <a href="architecture.html">Architecture</a>
       <div class="nav-section">Core systems</div>
-      <a href="personality.html">Personality</a>
+      <a href="personality.html">Conversational behavior</a>
       <a href="fallback-chain.html">Fallback chain</a>
       <a href="notification.html">Notifications</a>
       <a href="email-brief.html">Email brief</a>
@@ -45,45 +45,55 @@
 
     <div class="sidebar-foot">
       <a href="https://github.com/Capslockb/gemini-live-discord-bridge">GitHub →</a><br>
-      MIT licensed · Hermes Agent plugin
+      <a href="https://github.com/Capslockb/gemini-live-discord-bridge/issues/7">License decision pending</a> · Hermes Agent plugin
     </div>
   </aside>
 
   <main class="main">
     <div class="topbar">
-      <span class="crumb">Sfx Credits</span>
+      <span class="crumb">SFX credits</span>
       <span class="sep">/</span>
       <span>docs-site/</span>
       <div class="right">
-        <span class="pill good">v0.3.4.2</span>
-        <span class="pill warn">VOPI build</span>
+        <span class="pill good">v0.3.5</span>
+        <span class="pill warn">Rights unverified</span>
       </div>
     </div>
 
     <article class="content">
 <h1>SFX credits and provenance</h1>
 
-<p>The default sfx files shipped in <code>sfx/</code> are extracted from a YouTube playlist published under terms that allow non-commercial use with attribution. The clips are short (≤2 seconds each), heavily transformed (resampled to 24kHz mono PCM16, gain-adjusted, faded), and serve as the "starter" sfx library. Users are encouraged to swap in their own licensed audio via the <code>DISCORD_VOICE_LIVE_SFX_&lt;SLOT&gt;</code> env vars.</p>
+<p>The repository currently includes four derived WAV files under <code>sfx/</code>. The installer can copy those files into <code>~/.hermes/voice-users/sfx/</code> when the corresponding local slots are empty.</p>
 
-<h2>Source</h2>
+<p>The source videos and processing notes below establish provenance only. The repository does <strong>not</strong> currently include source license text, archived permission evidence, or another clear grant showing that the derived clips may be redistributed with this project. Attribution, short duration, resampling, gain changes, fading, or looping do not by themselves establish redistribution rights.</p>
 
-<p>Playlist: <strong>"UI Sound Effects for App & Game Development"</strong> by <strong>Brand Name Audio</strong> on YouTube URL: https://www.youtube.com/playlist?list=PLOK_EJ2O31LrGG7HvPiMeIsEiq4Wg6j-U Accessed: 2026-06-07</p>
+<p>Treat the bundled clips as <strong>rights-unverified</strong> until <a href="https://github.com/Capslockb/gemini-live-discord-bridge/issues/12">Issue #12</a> is resolved. This media-rights question is separate from the repository software-license decision in <a href="https://github.com/Capslockb/gemini-live-discord-bridge/issues/7">Issue #7</a>.</p>
+
+<h2>Recorded source provenance</h2>
+
+<p>Playlist: <strong>“UI Sound Effects for App &amp; Game Development”</strong> by <strong>Brand Name Audio</strong> on YouTube<br>
+URL: <a href="https://www.youtube.com/playlist?list=PLOK_EJ2O31LrGG7HvPiMeIsEiq4Wg6j-U">youtube.com/playlist</a><br>
+Recorded access date: 2026-06-07</p>
+
+<p>The playlist title, publisher name, video IDs, and access date are not evidence of a particular license or permission grant.</p>
 
 <h2>Specific source videos</h2>
 
-<table><thead><tr><th>Slot</th><th>YouTube ID</th><th>Title</th><th>Why this clip</th></tr></thead><tbody><tr><td><code>tool_init</code></td><td>oYS1Qg98QTg</td><td>"UI Notification CHIMES PACK"</td><td>First chime at t=1.96s (anchored via <code>silencedetect</code>); light, friendly opener</td></tr><tr><td><code>error</code></td><td>1QweURriLQA</td><td>"Loud Beep Sound Effects (UI User Interface)"</td><td>First loud beep at t=1.00s; looped 4× to make a 2.8s alert pattern</td></tr><tr><td><code>notification</code></td><td>XhLOi8C7FLc</td><td>"iPhone Android UI / UX Ringtones"</td><td>Mobile-OS style ping — clean, recognizable as a notification</td></tr><tr><td><code>transition</code></td><td>x8njWIqFKms</td><td>"The BEST POP Sound Effects"</td><td>First pop at t=1.91s with +8dB gain — pop/whoosh for session transitions</td></tr></tbody></table>
+<table><thead><tr><th>Slot</th><th>YouTube ID</th><th>Recorded title</th><th>Processing note</th></tr></thead><tbody><tr><td><code>tool_init</code></td><td><code>oYS1Qg98QTg</code></td><td><code>UI Notification CHIMES PACK</code></td><td>First chime near <code>1.96s</code>, located with <code>silencedetect</code></td></tr><tr><td><code>error</code></td><td><code>1QweURriLQA</code></td><td><code>Loud Beep Sound Effects (UI User Interface)</code></td><td>First beep near <code>1.00s</code>, repeated into an approximately <code>2.8s</code> alert</td></tr><tr><td><code>notification</code></td><td><code>XhLOi8C7FLc</code></td><td><code>iPhone Android UI / UX Ringtones</code></td><td>Short notification-style segment</td></tr><tr><td><code>transition</code></td><td><code>x8njWIqFKms</code></td><td><code>The BEST POP Sound Effects</code></td><td>First pop near <code>1.91s</code>, with gain adjustment</td></tr></tbody></table>
 
-<h2>How the clips were processed</h2>
+<h2>Recorded processing steps</h2>
 
-<ol><li><strong>Download</strong> with <code>yt-dlp -f bestaudio --extract-audio --audio-format wav</code></li><li><strong>Locate the attack</strong> with <code>ffmpeg -af silencedetect=noise=-30dB:d=0.2</code> — each <code>silence_end</code> timestamp marks where a loud region begins</li><li><strong>Cut</strong> a 0.7s window starting at the first <code>silence_end</code> (or 1.0s in for transition)</li><li><strong>Loop</strong> for the error slot (4× chain = 2.8s total)</li><li><strong>Resample</strong> to 24kHz mono PCM16 (the format the Gemini Live audio output expects)</li><li><strong>Gain</strong> +6 to +8dB on quieter clips (transition needed the boost)</li><li><strong>Fade-out</strong> at the end (0.12s) to prevent click artifacts on natural ends</li></ol>
+<ol><li>Downloaded audio with <code>yt-dlp</code>.</li><li>Located candidate attacks with FFmpeg <code>silencedetect</code>.</li><li>Cut short windows around the selected sounds.</li><li>Repeated the error clip to create a longer alert.</li><li>Resampled to 24 kHz mono PCM16.</li><li>Applied gain adjustments where needed.</li><li>Applied a short fade-out.</li></ol>
 
-<p>The full recipe is in the <code>silence-detect-sfx-cutting</code> skill.</p>
+<p>These transformations describe how the repository files were produced; they do not determine copyright ownership or licensing.</p>
 
-<h2>License</h2>
+<h2>Current operator guidance</h2>
 
-<p>The source videos are published by <strong>Brand Name Audio</strong> and are widely used as YouTube royalty-free SFX. The exact license terms should be confirmed on the source videos before commercial use. For personal / open-source use (this plugin's intended audience), the clips are credited here and can be swapped out by users with their own audio.</p>
+<p>Until the rights status is verified:</p>
 
-<p>If you're a rights holder and want these clips removed from the repo, please open an issue at https://github.com/Capslockb/gemini-live-discord-bridge/issues.</p>
+<ul><li>use WAV files you created yourself or obtained under explicit terms that permit this use and redistribution;</li><li>configure replacements with <code>DISCORD_VOICE_LIVE_SFX_&lt;SLOT&gt;</code> or a separate <code>DISCORD_VOICE_LIVE_SFX_DIR</code>;</li><li>or disable SFX with <code>DISCORD_VOICE_LIVE_SFX_ENABLED=false</code>.</li></ul>
+
+<p>Do not assume that a future root software license will automatically cover third-party audio files. If the bundled files are retained, each file needs an auditable source, license or permission record, required attribution, and redistribution basis. Otherwise the files should be replaced or removed through a separately reviewed media/release change.</p>
 
 <div class="pager"><a class="prev" href="sfx-library.html">
           <span class="label">Prev ←</span>
@@ -94,7 +104,7 @@
         </a></div>
 
       <div class="foot">
-        Hermes Live v0.3.4.2 · MIT · <a href="https://github.com/Capslockb/gemini-live-discord-bridge">github.com/Capslockb/gemini-live-discord-bridge</a>
+        Hermes Live v0.3.5 · <a href="https://github.com/Capslockb/gemini-live-discord-bridge/issues/7">License decision pending</a> · <a href="https://github.com/Capslockb/gemini-live-discord-bridge">github.com/Capslockb/gemini-live-discord-bridge</a>
       </div>
 
     </article>
