@@ -3,20 +3,13 @@
 ![Hermes Live Banner](docs/banner.png)
 
 > **Current Gemini Live runtime for Hermes Discord voice.**
-> Full-duplex Discord audio · Gemini Multimodal Live · local sidecar API · video frame feed · tool calling · Hermes plugin install.
+> Full-duplex Discord audio · Gemini Multimodal Live · local sidecar API · video frame feed · optional tool calling · Hermes plugin install.
 
-## Status: active, but transitioning toward SORA Bridge
+## Status: active
 
-This repository is still the **working Hermes Discord voice plugin** for Gemini Multimodal Live. Use it today when you need the live `/voice-live` Discord bridge.
+This repository is the working Hermes Discord voice plugin for Gemini Multimodal Live. Use it for the live `/voice-live` Discord bridge.
 
-We are slowly transitioning the broader bridge layer into [`Capslockb/sora-agent`](https://github.com/Capslockb/sora-agent), because the current code, README, and static docs site have drifted apart. The long-term direction is:
-
-- keep this repo stable as the Gemini Live runtime while migration happens;
-- move shared bridge orchestration, provider selection, API/TUI control, MCP, and VOIP work into SORA;
-- stop presenting older static docs as if they are a perfect source of truth;
-- regenerate docs from the actual code once the SORA migration settles.
-
-For now: **Gemini bridge = current Discord/Gemini runtime. SORA bridge = migration target and broader control layer.**
+The runtime code and Markdown documentation are the primary sources of truth. The checked-in static site under `docs-site/` is a generated snapshot and may lag until it is regenerated and reviewed.
 
 ---
 
@@ -27,7 +20,7 @@ For now: **Gemini bridge = current Discord/Gemini runtime. SORA bridge = migrati
 | Runtime | In-process Hermes plugin named `discord-voice` |
 | Plugin metadata | `plugin.yaml` reports version `0.3.5` |
 | Discord commands | `/voice-live` and `/voice-live-leave` via Hermes |
-| Hermes tools | `voice_live`, `voice_live_leave`, `voice_live_status`, `voice_live_frame`, `voice_live_video_status`, `voice_live_notes` |
+| Hermes tools | Session start, leave, status, frame, video-status, and notes operations |
 | Gemini model default | `gemini-3.1-flash-live-preview`, with fallback list via env |
 | Gemini voice default | `Kore` |
 | Audio path | Discord 48 kHz stereo PCM → 16 kHz mono Gemini input → 24 kHz mono Gemini output → Discord 48 kHz stereo |
@@ -36,7 +29,7 @@ For now: **Gemini bridge = current Discord/Gemini runtime. SORA bridge = migrati
 | HTTP response framing | `_format_response()` calculates `Content-Length` from a Python string before UTF-8 encoding. Default JSON responses normally ASCII-escape non-ASCII values, but direct Unicode bodies, `ensure_ascii=False`, and future non-escaping callers remain unsafe until [Issue #13](https://github.com/Capslockb/gemini-live-discord-bridge/issues/13) is fixed and tested. |
 | Video delivery | The `/frame` route, external feeder, and `voice_live_frame` client are not end-to-end operational. Startup, secret-file, and missing-auth-header defects are tracked in [Issue #9](https://github.com/Capslockb/gemini-live-discord-bridge/issues/9). |
 | Transcript exposure | `/notes` is currently unauthenticated and returns recent transcript/note events. Keep the sidecar strictly loopback-only and review [Issue #4](https://github.com/Capslockb/gemini-live-discord-bridge/issues/4) before exposing it through any proxy or browser-accessible path. |
-| Static docs site | Kept in `docs-site/`, but it is a static snapshot and may lag behind the markdown docs/code |
+| Static docs site | Kept in `docs-site/`, but it is a generated snapshot and may lag behind the Markdown docs and code |
 
 ---
 
@@ -46,7 +39,7 @@ The bridge uses the Gemini Live WebSocket endpoint directly instead of the GenAI
 
 **[`docs/gemini-live-implementation.md`](docs/gemini-live-implementation.md)**
 
-That page is the current best explanation of how the modular `bridge_core.py`, `bridge_audio.py`, `bridge_http.py`, and related modules map Discord voice to Gemini Live. `bridge.py` is a compatibility facade.
+That page explains how the modular `bridge_core.py`, `bridge_audio.py`, `bridge_http.py`, and related modules map Discord voice to Gemini Live. `bridge.py` is a compatibility facade.
 
 ---
 
@@ -118,7 +111,7 @@ Full code-grounded env reference: [`docs/env-vars.md`](docs/env-vars.md).
 
 ---
 
-## What this bridge actually does
+## What this bridge does
 
 | Feature | Current implementation |
 |---|---|
@@ -128,8 +121,8 @@ Full code-grounded env reference: [`docs/env-vars.md`](docs/env-vars.md).
 | Barge-in | Uses Gemini `START_OF_ACTIVITY_INTERRUPTS` plus a local fast output-clear path on speech energy |
 | First-turn mute | Sends empty `audioStreamEnd` after `setupComplete`; deployment should set `DISCORD_VOICE_LIVE_GREETING=` if it wants zero greeting output |
 | Video frames | `/frame`, the external feeder, and `voice_live_frame` are present but blocked on current `main`; see [Issue #9](https://github.com/Capslockb/gemini-live-discord-bridge/issues/9) and [`docs/video.md`](docs/video.md). |
-| Tool calling | Handles local, web, Spotify, GitHub, Home Assistant, email, inspection, onboarding, and delegation-style tools when configured |
-| Honcho context | Optional per-user context injection into the system prompt |
+| Optional integrations | Tool calls can be enabled by deployment configuration. Review each integration's permissions, data boundary, and destination before enabling it. |
+| Per-user context | Optional context can be supplied when explicitly configured |
 | Proactive notification path | Local notification dispatcher and `/notify` sidecar route; authenticated sidecar delivery remains blocked by [Issue #5](https://github.com/Capslockb/gemini-live-discord-bridge/issues/5). |
 | Notes/transcripts | JSONL-style note events under `~/.hermes/voice-live-notes/` by default |
 | Idle handling | Idle prompts, grace hangup, and fallback auto-leave are env-driven |
@@ -144,7 +137,7 @@ Default bind:
 http://127.0.0.1:18943
 ```
 
-> **Security status:** current `main` has a known auth-path crash in `bridge_http.py`. Requests reaching the secret comparison raise `NameError`, so the mutating routes below must not be treated as operational until [Issue #5](https://github.com/Capslockb/gemini-live-discord-bridge/issues/5) is fixed with exact-head tests. `/notes` is also intentionally unauthenticated in the current code and exposes recent transcript data; do not proxy or otherwise broaden access to the sidecar while [Issue #4](https://github.com/Capslockb/gemini-live-discord-bridge/issues/4) remains open.
+> **Security status:** current `main` has a known auth-path crash in `bridge_http.py`. Requests reaching the secret comparison raise `NameError`, so the mutating routes below must not be treated as operational until [Issue #5](https://github.com/Capslockb/gemini-live-discord-bridge/issues/5) is fixed with exact-head tests. `/notes` is also unauthenticated in the current code and exposes recent transcript data; do not proxy or otherwise broaden access to the sidecar while [Issue #4](https://github.com/Capslockb/gemini-live-discord-bridge/issues/4) remains open.
 
 | Route | Intended auth | Purpose |
 |---|---|---|
@@ -165,30 +158,24 @@ DISCORD_VOICE_LIVE_SECRET_FILE=~/.hermes/voice-live-control-secret
 
 ## Documentation map
 
-Current markdown docs:
+Current Markdown docs:
 
-- [`docs/gemini-live-implementation.md`](docs/gemini-live-implementation.md) — Gemini Live setup/audio/video/tools/reconnect details.
+- [`docs/gemini-live-implementation.md`](docs/gemini-live-implementation.md) — Gemini Live setup, audio, video, tools, and reconnect details.
 - [`docs/architecture.md`](docs/architecture.md) — architecture and lifecycle.
-- [`docs/env-vars.md`](docs/env-vars.md) — code-grounded env var defaults.
-- [`docs/quickstart.md`](docs/quickstart.md) — install and first session.
+- [`docs/env-vars.md`](docs/env-vars.md) — code-grounded environment defaults.
+- [`docs/quickstart.md`](docs/quickstart.md) — installation and first session.
 - [`docs/troubleshooting.md`](docs/troubleshooting.md) — operational failure modes.
 - [`docs/video.md`](docs/video.md) — current frame-feeder and `/frame` status.
 
-`docs-site/` is a static site snapshot. Treat the markdown docs and code as more current until the static site is regenerated.
+`docs-site/` is a generated static-site snapshot. Treat the Markdown docs and code as more current until the site is regenerated and reviewed.
 
 ---
 
-## Migration plan: Gemini bridge → SORA bridge
+## Scope and maintenance
 
-The migration is intentionally gradual.
+This repository documents and maintains the Gemini Live Discord bridge. Broader orchestration products, provider-routing plans, and unrelated control surfaces are outside this README's public support scope.
 
-1. **Stabilize this repo** as the working Gemini Live Discord runtime.
-2. **Document the truth** instead of preserving older marketing copy.
-3. **Move orchestration into SORA**: provider selection, CLI control, API/TUI surface, MCP, VOIP, config, diagnostics.
-4. **Transplant or wrap the working Gemini runtime** once SORA’s bridge layer is ready.
-5. **Retire duplicate docs** once SORA owns the bridge surface cleanly.
-
-Until step 4 is complete, do not assume `sora-agent` fully replaces this repo for live Discord/Gemini audio.
+Keep public documentation focused on observable product behavior, supported configuration, security boundaries, troubleshooting, and contribution guidance. Do not publish private prompt text, privileged control grammar, deployment-specific identities, or internal coordination instructions.
 
 ---
 
@@ -205,13 +192,7 @@ cd "$HERMES_ROOT/plugins/discord-voice"
 "$HERMES_ROOT/hermes-agent/venv/bin/python" -m unittest tests.test_interrupt_latency tests.test_transcript_latency -v
 ```
 
-Do not run multiple competing Gemini/SORA voice plugins against the same Discord bot/channel unless you are intentionally testing conflicts.
-
----
-
-## Related project
-
-- [`Capslockb/sora-agent`](https://github.com/Capslockb/sora-agent) — the SORA Bridge / CLI / API / Hermes-plugin migration target.
+Do not run multiple competing voice-bridge instances against the same Discord bot or channel unless you are intentionally testing conflicts.
 
 ---
 
