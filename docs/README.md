@@ -68,7 +68,7 @@ Do not copy older unauthenticated examples for `/say`, `/frame`, `/notify`, or `
 ## Scope boundaries
 
 - The sidecar is local control infrastructure, not a production web API.
-- The repository is still the working Gemini Discord runtime while broader orchestration migrates toward `Capslockb/sora-agent`; SORA does not yet replace every live Discord/Gemini path documented here.
+- This documentation covers the current Gemini Discord bridge. Broader orchestration products, provider-routing plans, and unrelated control surfaces are outside this repository's public support scope.
 - Shared or mirrored identity and authorization code must have one canonical implementation owner and an explicit import, archive, or tested-backport policy; do not maintain independent security fixes in duplicate files.
 - Generated pages in `docs-site/` should be regenerated only after their source Markdown and generator behavior have been reviewed against the current code.
 - Generated docs and release artifacts must not make unsupported software-license or third-party-media rights claims.
