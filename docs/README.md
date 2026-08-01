@@ -17,7 +17,7 @@ Use this source-of-truth order when files disagree:
 | [`quickstart.md`](quickstart.md) | Installation and first-session setup |
 | [`env-vars.md`](env-vars.md) | Runtime environment variables and defaults |
 | [`troubleshooting.md`](troubleshooting.md) | Operational failure modes and diagnostics |
-| [`personality.md`](personality.md) | Public-safe conversational behavior, editing guidance, and prompt-disclosure boundaries |
+| [`personality.md`](personality.md) | Conversational behavior, configuration location, and validation guidance |
 | [`fallback-chain.md`](fallback-chain.md) | Multi-CLI delegation and fallback health handling |
 | [`notification.md`](notification.md) | Local notifications, scheduled notifications, and `/notify` |
 | [`email-brief.md`](email-brief.md) | Email brief tool and scheduler |
@@ -40,7 +40,7 @@ Use this source-of-truth order when files disagree:
 - The bridge does not create conventional audio recordings, but note/transcript events are persisted under `~/.hermes/voice-live-notes/` by default unless configuration changes that location or behavior.
 - Email briefs can currently mask total backend failure as an empty inbox, advance de-duplication after failed delivery, and report `notified: true` without successful delivery. The scheduler also has recipient-routing and model-visible snippet privacy blockers. Keep scheduled briefs disabled unless the destination and data boundary are explicitly verified, and see [Issue #10](https://github.com/Capslockb/gemini-live-discord-bridge/issues/10).
 - The repository includes derived WAV files whose provenance is recorded but whose redistribution permission has not been verified. Use your own explicitly licensed files or set `DISCORD_VOICE_LIVE_SFX_ENABLED=false` while [Issue #12](https://github.com/Capslockb/gemini-live-discord-bridge/issues/12) remains open. The eventual root software license tracked in [Issue #7](https://github.com/Capslockb/gemini-live-discord-bridge/issues/7) must not be treated as granting rights to third-party media.
-- Public documentation must describe observable behavior and supported configuration without reproducing verbatim system prompts, privileged control grammar, deployment-specific identity data, or tool-authorization instructions. See [`personality.md`](personality.md).
+- Public documentation should describe observable behavior, supported configuration, known limitations, and testable security boundaries. Keep deployment-specific identifiers, credentials, private runtime data, and unverified claims out of examples. See [`personality.md`](personality.md).
 
 ## Quick reference
 
