@@ -2,6 +2,7 @@
 import ast
 import asyncio
 import base64
+import hmac
 import html
 import json
 import logging
@@ -97,7 +98,7 @@ async def handle_http_request(reader, writer):
             return
         presented = headers.get("x-api-secret", "")
         # Constant-time compare to avoid timing leaks.
-        if not hmac.compare_digest(presented, _SECRET):
+        if not _hmac_compare(presented, _SECRET):
             status = 401
             response_body = json.dumps({"error": "unauthorized"})
             response = _format_response(status, response_body, reason="UNAUTHORIZED")
@@ -284,16 +285,9 @@ def _format_response(status: int, body: str, reason: Optional[str] = None) -> by
     ).encode()
 
 
-def _hmac_compare(a: bytes, b: bytes) -> bool:
-    """Patch 9: constant-time string comparison so the auth check doesn't
-    leak the secret length / prefix via response timing. Falls back to a
-    naive compare if hmac.compare_digest is unavailable (it always is on
-    CPython 3.3+ but the fallback is cheap insurance)."""
-    try:
-        import hmac
-        return hmac.compare_digest(a, b)
-    except Exception:
-        return a == b
+def _hmac_compare(a: str, b: str) -> bool:
+    """Compare two control secrets in constant time."""
+    return hmac.compare_digest(a, b)
 
 
 async def run_sidecar(vc, adapter, ready_future: Optional[asyncio.Future] = None, user_profile: Optional[Any] = None,
