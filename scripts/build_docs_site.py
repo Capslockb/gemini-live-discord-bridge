@@ -15,49 +15,52 @@ import re
 import sys
 from pathlib import Path
 
-ROOT      = Path(__file__).resolve().parent.parent
-DOCS_DIR  = ROOT / "docs"
-SITE_DIR  = ROOT / "docs-site"
+ROOT = Path(__file__).resolve().parent.parent
+DOCS_DIR = ROOT / "docs"
+SITE_DIR = ROOT / "docs-site"
+LICENSE_ISSUE_URL = (
+    "https://github.com/Capslockb/gemini-live-discord-bridge/issues/7"
+)
 
 # nav order matters; matches the landing sidebar
 NAV = [
     ("getting-started", "Getting started", [
-        ("index.html",        "Overview"),
-        ("quickstart.html",   "Quick start"),
+        ("index.html", "Overview"),
+        ("quickstart.html", "Quick start"),
         ("architecture.html", "Architecture"),
     ]),
     ("core-systems", "Core systems", [
-        ("personality.html",    "Personality"),
+        ("personality.html", "Conversational behavior"),
         ("fallback-chain.html", "Fallback chain"),
-        ("notification.html",   "Notifications"),
-        ("email-brief.html",    "Email brief"),
-        ("sfx-library.html",    "SFX library"),
-        ("sfx-credits.html",    "SFX credits"),
-        ("webhooks.html",       "Webhooks"),
-        ("video.html",          "Video feeder"),
+        ("notification.html", "Notifications"),
+        ("email-brief.html", "Email brief"),
+        ("sfx-library.html", "SFX library"),
+        ("sfx-credits.html", "SFX credits"),
+        ("webhooks.html", "Webhooks"),
+        ("video.html", "Video feeder"),
     ]),
     ("reference", "Reference", [
-        ("env-vars.html",       "Environment variables"),
-        ("troubleshooting.html","Troubleshooting"),
-        ("changelog.html",      "Changelog"),
+        ("env-vars.html", "Environment variables"),
+        ("troubleshooting.html", "Troubleshooting"),
+        ("changelog.html", "Changelog"),
     ]),
 ]
 
 # title overrides per .md (so the page title is human, not the file name)
 PAGE_TITLES = {
-    "architecture":   "Architecture — Hermes Live",
-    "personality":    "Personality — Hermes Live",
+    "architecture": "Architecture — Hermes Live",
+    "personality": "Conversational behavior — Hermes Live",
     "fallback-chain": "Fallback chain — Hermes Live",
-    "notification":   "Notification system — Hermes Live",
-    "email-brief":    "Email brief — Hermes Live",
-    "sfx-library":    "SFX library — Hermes Live",
-    "sfx-credits":    "SFX credits — Hermes Live",
-    "webhooks":       "Webhooks — Hermes Live",
-    "video":          "Video frame feeder — Hermes Live",
-    "env-vars":       "Environment variables — Hermes Live",
-    "troubleshooting":"Troubleshooting — Hermes Live",
-    "changelog":      "Changelog — Hermes Live",
-    "quickstart":     "Quick start — Hermes Live",
+    "notification": "Notification system — Hermes Live",
+    "email-brief": "Email brief — Hermes Live",
+    "sfx-library": "SFX library — Hermes Live",
+    "sfx-credits": "SFX credits — Hermes Live",
+    "webhooks": "Webhooks — Hermes Live",
+    "video": "Video frame feeder — Hermes Live",
+    "env-vars": "Environment variables — Hermes Live",
+    "troubleshooting": "Troubleshooting — Hermes Live",
+    "changelog": "Changelog — Hermes Live",
+    "quickstart": "Quick start — Hermes Live",
 }
 
 # Pager order = the same as NAV flattened, but with explicit prev/next.
@@ -78,22 +81,61 @@ ORDER = [
     "changelog.html",
 ]
 
-# Page description for the <meta name="description"> tag
+# Page description for the <meta name="description"> tag.
+# Keep descriptions public-facing: do not summarize private prompt text,
+# identity strings, control grammar, authorization rules, or session data.
 META_DESC = {
-    "architecture":    "End-to-end audio path, threading model, and lifecycle of the Hermes Live Discord voice bridge.",
-    "personality":     "The 14-section system prompt, ping-pong rhythm, boredom switch, and vocal expression cap that govern the agent.",
-    "fallback-chain":  "Multi-CLI delegation with a health registry. opencode / codex / numasec / gemini / hermes-api, with automatic fallback.",
-    "notification":    "Five delivery channels, scheduled notifications, and AFK delivery for the Hermes Live voice agent.",
-    "email-brief":     "Scheduled Gmail digest with 3-bucket importance scoring. AFK delivery via the notification dispatcher.",
-    "sfx-library":     "Four-slot UI sound effects library: tool-init, error, notification, transition. Env-driven, lazy PCM cache.",
-    "sfx-credits":     "Provenance and license of the default sfx clips bundled with Hermes Live.",
-    "webhooks":        "Nine event classes for fanout: voice.transcript, bridge.status, email.sent, tool.called, and more.",
-    "video":           "Companion feeder script that captures your local screen and pushes frames to the bridge over HTTP.",
-    "env-vars":        "Every DISCORD_VOICE_LIVE_* environment variable, with defaults and descriptions.",
-    "troubleshooting": "Common bridge failures and how to fix them: bridge won't start, interrupts lag, sfx not playing, email brief fails.",
-    "changelog":       "Hermes Live release history. Load-bearing fixes, reference baselines, and what changed in each version.",
-    "quickstart":      "Five commands, two minutes. Install the bridge, restart the gateway, run /voice-live in Discord.",
+    "architecture": (
+        "End-to-end audio path, threading model, and lifecycle of the "
+        "Hermes Live Discord voice bridge."
+    ),
+    "personality": (
+        "Public-safe conversational behavior, configuration guidance, and "
+        "prompt-disclosure boundaries for Hermes Live."
+    ),
+    "fallback-chain": (
+        "Delegation fallback behavior, health handling, portability limits, "
+        "and rate-limit caveats."
+    ),
+    "notification": (
+        "Notification delivery, scheduling, storage, and current sidecar "
+        "limitations for Hermes Live."
+    ),
+    "email-brief": (
+        "Email brief configuration and the current backend, delivery-state, "
+        "recipient-routing, and privacy limitations."
+    ),
+    "sfx-library": (
+        "Optional sound-effect slots, configuration, and runtime behavior for "
+        "Hermes Live."
+    ),
+    "sfx-credits": (
+        "Recorded provenance and unresolved redistribution-rights status for "
+        "the bundled sound-effect files."
+    ),
+    "webhooks": "Webhook event classes, throttling, payload shape, and configuration.",
+    "video": (
+        "Frame-input design and the current feeder startup and authentication "
+        "limitations."
+    ),
+    "env-vars": (
+        "Hermes Live environment variables, defaults, and known path or "
+        "runtime limitations."
+    ),
+    "troubleshooting": (
+        "Operational diagnostics that distinguish current blockers from "
+        "post-fix procedures."
+    ),
+    "changelog": (
+        "Hermes Live repository history; current code and open issues remain "
+        "the source of truth for present behavior."
+    ),
+    "quickstart": (
+        "Installation and first-session setup with current installer, "
+        "security, privacy, and licensing warnings."
+    ),
 }
+
 
 # ─────────────────────────── markdown → HTML (small, GFM-ish) ────────────
 
@@ -105,11 +147,13 @@ def md_to_html(md: str) -> str:
     code_buf: list[str] = []
     code_lang = ""
 
-    def flush_code():
+    def flush_code() -> None:
         nonlocal code_buf, code_lang
         if code_buf:
             body = html.escape("\n".join(code_buf))
-            out.append(f'<pre><code class="lang-{html.escape(code_lang)}">{body}</code></pre>')
+            out.append(
+                f'<pre><code class="lang-{html.escape(code_lang)}">{body}</code></pre>'
+            )
         code_buf = []
         code_lang = ""
 
@@ -130,11 +174,16 @@ def md_to_html(md: str) -> str:
             continue
 
         # tables (GFM: | a | b | followed by | - | - |)
-        if "|" in line and i + 1 < len(lines) and re.match(r"^\s*\|[\s:\-|]+\|\s*$", lines[i + 1]):
+        if (
+            "|" in line
+            and i + 1 < len(lines)
+            and re.match(r"^\s*\|[\s:\-|]+\|\s*$", lines[i + 1])
+        ):
             tbl: list[str] = [line]
             j = i + 2
             while j < len(lines) and lines[j].lstrip().startswith("|"):
-                tbl.append(lines[j]); j += 1
+                tbl.append(lines[j])
+                j += 1
             out.append(_render_table(tbl))
             i = j
             continue
@@ -192,7 +241,8 @@ def md_to_html(md: str) -> str:
         para = [line]
         i += 1
         while i < len(lines) and lines[i].strip() and not _is_block(lines[i]):
-            para.append(lines[i]); i += 1
+            para.append(lines[i])
+            i += 1
         out.append(f"<p>{_inline(' '.join(para))}</p>")
 
     if in_code:
@@ -202,21 +252,33 @@ def md_to_html(md: str) -> str:
 
 def _is_block(line: str) -> bool:
     s = line.lstrip()
-    return (s.startswith("#") or s.startswith("```") or s.startswith(">")
-            or s.startswith("|") or s.startswith("---")
-            or re.match(r"^[-*]\s+", s) or re.match(r"^\d+\.\s+", s))
+    return bool(
+        s.startswith("#")
+        or s.startswith("```")
+        or s.startswith(">")
+        or s.startswith("|")
+        or s.startswith("---")
+        or re.match(r"^[-*]\s+", s)
+        or re.match(r"^\d+\.\s+", s)
+    )
 
 
 def _render_table(rows: list[str]) -> str:
     def split(row: str) -> list[str]:
         s = row.strip()
-        if s.startswith("|"): s = s[1:]
-        if s.endswith("|"):   s = s[:-1]
+        if s.startswith("|"):
+            s = s[1:]
+        if s.endswith("|"):
+            s = s[:-1]
         return [c.strip() for c in s.split("|")]
+
     header = split(rows[0])
-    body   = [split(r) for r in rows[1:]]
+    body = [split(r) for r in rows[1:]]
     h = "".join(f"<th>{_inline(c)}</th>" for c in header)
-    b = "".join("<tr>" + "".join(f"<td>{_inline(c)}</td>" for c in r) + "</tr>" for r in body)
+    b = "".join(
+        "<tr>" + "".join(f"<td>{_inline(c)}</td>" for c in r) + "</tr>"
+        for r in body
+    )
     return f"<table><thead><tr>{h}</tr></thead><tbody>{b}</tbody></table>"
 
 
@@ -239,13 +301,13 @@ def render_page(slug: str, source_md_path: Path) -> str:
     md = source_md_path.read_text(encoding="utf-8")
     body = md_to_html(md)
     title = PAGE_TITLES.get(slug, f"{slug.title()} — Hermes Live")
-    desc  = META_DESC.get(slug, "Hermes Live — Discord voice agent documentation.")
+    desc = META_DESC.get(slug, "Hermes Live — Discord voice bridge documentation.")
 
     prev, nxt = _pager_for(slug)
 
     sidebar = _render_sidebar(current=slug + ".html")
-    topbar  = _render_topbar(current=slug)
-    pager   = _render_pager(prev, nxt)
+    topbar = _render_topbar(current=slug)
+    pager = _render_pager(prev, nxt)
 
     return f"""<!doctype html>
 <html lang="en">
@@ -272,7 +334,7 @@ def render_page(slug: str, source_md_path: Path) -> str:
 {pager}
 
       <div class="foot">
-        Hermes Live v0.3.4.2 · MIT · <a href="https://github.com/Capslockb/gemini-live-discord-bridge">github.com/Capslockb/gemini-live-discord-bridge</a>
+        Hermes Live v0.3.4.2 · License pending owner decision · <a href="{LICENSE_ISSUE_URL}">Issue #7</a> · <a href="https://github.com/Capslockb/gemini-live-discord-bridge">github.com/Capslockb/gemini-live-discord-bridge</a>
       </div>
 
     </article>
@@ -293,16 +355,23 @@ def _pager_for(slug: str) -> tuple[tuple[str, str] | None, tuple[str, str] | Non
         return (None, None)
     idx = ORDER.index(fname)
     prev = ORDER[idx - 1] if idx > 0 else None
-    nxt  = ORDER[idx + 1] if idx < len(ORDER) - 1 else None
+    nxt = ORDER[idx + 1] if idx < len(ORDER) - 1 else None
+
     def label(f: str) -> str:
-        if f == "index.html": return "Overview"
-        return PAGE_TITLES.get(f.replace(".html", ""), f.replace(".html", "").replace("-", " ").title())
+        if f == "index.html":
+            return "Overview"
+        return PAGE_TITLES.get(
+            f.replace(".html", ""),
+            f.replace(".html", "").replace("-", " ").title(),
+        )
+
     return ((prev, label(prev)) if prev else None, (nxt, label(nxt)) if nxt else None)
 
 
 def _render_pager(prev, nxt) -> str:
     def cell(side, item):
-        if not item: return f'<a class="{side}" style="visibility:hidden"></a>'
+        if not item:
+            return f'<a class="{side}" style="visibility:hidden"></a>'
         f, lbl = item
         arrow = "←" if side == "prev" else "→"
         anchor = "Prev" if side == "prev" else "Next"
@@ -310,6 +379,7 @@ def _render_pager(prev, nxt) -> str:
           <span class="label">{anchor} {arrow}</span>
           <span class="title">{html.escape(lbl)}</span>
         </a>'''
+
     return '<div class="pager">' + cell("prev", prev) + cell("next", nxt) + "</div>"
 
 
@@ -332,18 +402,21 @@ def _render_sidebar(current: str) -> str:
         for href, label in items:
             cls = ' class="active"' if href == current else ""
             out.append(f'      <a href="{href}"{cls}>{html.escape(label)}</a>')
-    out.append('''    </nav>
+    out.append(f'''    </nav>
 
     <div class="sidebar-foot">
       <a href="https://github.com/Capslockb/gemini-live-discord-bridge">GitHub →</a><br>
-      MIT licensed · Hermes Agent plugin
+      License pending owner decision · <a href="{LICENSE_ISSUE_URL}">Issue #7</a>
     </div>''')
     return "\n".join(out)
 
 
 def _render_topbar(current: str) -> str:
     crumb = current.replace("-", " ").replace(".html", "").title()
-    if current == "index": crumb = "Overview"
+    if current == "index":
+        crumb = "Overview"
+    elif current == "personality":
+        crumb = "Conversational behavior"
     return f'''    <div class="topbar">
       <span class="crumb">{html.escape(crumb)}</span>
       <span class="sep">/</span>
@@ -359,30 +432,34 @@ def _render_topbar(current: str) -> str:
 
 def main() -> int:
     SITE_DIR.mkdir(parents=True, exist_ok=True)
-    (SITE_DIR / "style.css").write_text((ROOT / "docs-site" / "style.css").read_text(), encoding="utf-8")
-    (SITE_DIR / "nav.js"  ).write_text((ROOT / "docs-site" / "nav.js"  ).read_text(), encoding="utf-8")
+    (SITE_DIR / "style.css").write_text(
+        (ROOT / "docs-site" / "style.css").read_text(), encoding="utf-8"
+    )
+    (SITE_DIR / "nav.js").write_text(
+        (ROOT / "docs-site" / "nav.js").read_text(), encoding="utf-8"
+    )
 
     slug_to_md = {
-        "quickstart":     "quickstart.md",
-        "architecture":   "architecture.md",
-        "personality":    "personality.md",
+        "quickstart": "quickstart.md",
+        "architecture": "architecture.md",
+        "personality": "personality.md",
         "fallback-chain": "fallback-chain.md",
-        "notification":   "notification.md",
-        "email-brief":    "email-brief.md",
-        "sfx-library":    "sfx-library.md",
-        "sfx-credits":    "sfx-credits.md",
-        "webhooks":       "webhooks.md",
-        "video":          "video.md",
-        "env-vars":       "env-vars.md",
-        "troubleshooting":"troubleshooting.md",
-        "changelog":      "../CHANGELOG.md",
+        "notification": "notification.md",
+        "email-brief": "email-brief.md",
+        "sfx-library": "sfx-library.md",
+        "sfx-credits": "sfx-credits.md",
+        "webhooks": "webhooks.md",
+        "video": "video.md",
+        "env-vars": "env-vars.md",
+        "troubleshooting": "troubleshooting.md",
+        "changelog": "../CHANGELOG.md",
     }
 
-    # ensure quickstart source exists; create a stub if not
+    # ensure quickstart source exists; create a conservative stub if not
     quickstart_src = DOCS_DIR / "quickstart.md"
     if not quickstart_src.exists():
         quickstart_src.write_text(_quickstart_stub(), encoding="utf-8")
-        print(f"  + created stub: docs/quickstart.md", file=sys.stderr)
+        print("  + created stub: docs/quickstart.md", file=sys.stderr)
 
     for slug, md_name in slug_to_md.items():
         src = DOCS_DIR / md_name
@@ -400,7 +477,7 @@ def main() -> int:
 def _quickstart_stub() -> str:
     return """# Quick start
 
-Five commands, two minutes.
+Review the current open issues and security/privacy limitations before installation.
 
 ## Install
 
@@ -409,28 +486,14 @@ Five commands, two minutes.
 git clone https://github.com/Capslockb/gemini-live-discord-bridge.git
 cd gemini-live-discord-bridge
 
-# 2. Install — prompts for DISCORD_BOT_TOKEN, GEMINI_API_KEY, your Discord user ID
+# 2. Review README.md, docs/README.md, and the open issues
+
+# 3. Install
 ./install.sh
 
-# 3. Restart the gateway so the plugin loads
+# 4. Restart the gateway
 systemctl --user restart hermes-gateway
 ```
-
-## First session
-
-From Discord, join a voice channel, then in any text channel:
-
-```
-/voice-live          # join
-/voice-live-leave    # leave
-```
-
-That's it. The bridge will:
-
-1. Connect to your voice channel (Discord CDN quirk: first attempt takes ~27s — this is normal, do not restart the gateway)
-2. Handshake with Gemini Live
-3. Play the `transition` sfx
-4. Wait for you to speak — first turn is muted by design
 
 ## Verify
 
@@ -438,19 +501,21 @@ That's it. The bridge will:
 curl -s http://127.0.0.1:18943/health | python3 -m json.tool
 ```
 
-You should see `"voice_connected": true`, `"running": true`, and a non-zero `audio_in_chunks` after you speak.
+`/health` is anonymous and read-only. Keep the sidecar loopback-only. Mutating routes remain unavailable until Issue #5 is fixed and validated; `/notes` exposes stored note/transcript data without authentication.
 
-## Common pitfalls
+## Current limitations
 
-- **"Bridge failed to start"** — wait ~30s. The first 5 voice WebSocket handshakes are rejected by the Discord CDN; the bridge retries.
-- **First-turn hallucination** ("I see you're sharing your screen") — the system prompt has the guard, but if you see this, the audioStreamEnd mute is missing. Check `bridge.py` for `await self._gemini._ws.send(json.dumps({"realtimeInput": {"audioStreamEnd": True}}))` right after `connect()`.
-- **No audio in voice** — check `~/.hermes/voice-users/sfx/` exists and the four WAV files are present.
+- Installer rerun and unattended-mode behavior is tracked in Issue #11.
+- Mutating sidecar authentication is tracked in Issue #5.
+- Bundled frame delivery is tracked in Issue #9.
+- Email brief delivery and privacy behavior is tracked in Issue #10.
+- Repository licensing is unresolved under Issue #7, and bundled media rights are separate under Issue #12.
 
 ## Next
 
-- [Architecture](architecture.html) — understand the audio path and threading model.
-- [Environment variables](env-vars.html) — every `DISCORD_VOICE_LIVE_*` env var.
-- [Troubleshooting](troubleshooting.html) — what to do when it doesn't work.
+- [Architecture](architecture.html)
+- [Environment variables](env-vars.html)
+- [Troubleshooting](troubleshooting.html)
 """
 
 
