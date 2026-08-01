@@ -175,7 +175,7 @@ Current Markdown docs:
 
 This repository documents and maintains the Gemini Live Discord bridge. Broader orchestration products, provider-routing plans, and unrelated control surfaces are outside this README's public support scope.
 
-Keep public documentation focused on observable product behavior, supported configuration, security boundaries, troubleshooting, and contribution guidance. Do not publish private prompt text, privileged control grammar, deployment-specific identities, or internal coordination instructions.
+Keep public documentation focused on observable product behavior, supported configuration, security boundaries, troubleshooting, and contribution guidance. Avoid deployment-specific identifiers, credentials, private operational data, and claims that are not backed by the current code or tests.
 
 ---
 
