@@ -26,5 +26,5 @@ optional_env:
     prompt: "Local HTTP control port (default: 18943)"
     password: false
   - name: DISCORD_VOICE_LIVE_VOICE
-    prompt: "TTS voice (default: en-US-JennyNeural — high-pitched female)"
+    prompt: "Gemini Live voice (default: Kore)"
     password: false
