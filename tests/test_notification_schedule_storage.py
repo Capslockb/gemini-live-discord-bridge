@@ -8,9 +8,6 @@ import notification
 
 
 class ScheduledNotificationStorageTests(unittest.TestCase):
-    def setUp(self) -> None:
-        notification._LEGACY_STORAGE_WARNING_EMITTED = False
-
     def test_default_path_uses_default_hermes_home(self) -> None:
         home = Path("/example/home")
 
@@ -63,7 +60,7 @@ class ScheduledNotificationStorageTests(unittest.TestCase):
             self.assertTrue(selected.exists())
             self.assertTrue(legacy.exists())
 
-    def test_legacy_store_is_never_moved_or_deleted(self) -> None:
+    def test_legacy_store_blocks_creation_at_a_new_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             selected = root / "custom" / notification.SCHEDULED_FILENAME
@@ -74,7 +71,11 @@ class ScheduledNotificationStorageTests(unittest.TestCase):
             with patch.object(notification, "SCHEDULED_PATH", selected), patch.object(
                 notification, "LEGACY_SCHEDULED_PATH", legacy
             ):
-                self.assertEqual(notification._checked_scheduled_path(), selected)
+                with self.assertRaises(notification.ScheduledStorageConflictError):
+                    notification.schedule_notification(
+                        fire_at=time.time() + 60,
+                        text="do not split the store",
+                    )
 
             self.assertFalse(selected.exists())
             self.assertEqual(
