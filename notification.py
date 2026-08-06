@@ -66,35 +66,22 @@ def resolve_scheduled_path(
 
 SCHEDULED_PATH = resolve_scheduled_path()
 LEGACY_SCHEDULED_PATH = Path.home() / ".hermes" / SCHEDULED_FILENAME
-_LEGACY_STORAGE_WARNING_EMITTED = False
 
 
 def _checked_scheduled_path() -> Path:
-    """Return the selected store and fail closed on ambiguous dual storage."""
-    global _LEGACY_STORAGE_WARNING_EMITTED
-
+    """Return the selected store and fail closed before ambiguous migration."""
     selected = SCHEDULED_PATH
     legacy = LEGACY_SCHEDULED_PATH
-    if selected == legacy:
+    if selected == legacy or not legacy.exists():
         return selected
 
-    selected_exists = selected.exists()
-    legacy_exists = legacy.exists()
-    if selected_exists and legacy_exists:
-        raise ScheduledStorageConflictError(
-            "both configured and legacy scheduled-notification stores exist; "
-            "choose and migrate one explicitly before using the scheduler"
-        )
-
-    if legacy_exists and not _LEGACY_STORAGE_WARNING_EMITTED:
-        logger.warning(
-            "legacy scheduled-notification store remains at %s; selected store is %s; "
-            "no automatic migration was performed",
-            legacy,
-            selected,
-        )
-        _LEGACY_STORAGE_WARNING_EMITTED = True
-    return selected
+    if selected.exists():
+        detail = "both configured and legacy scheduled-notification stores exist"
+    else:
+        detail = "a legacy scheduled-notification store exists at a different path"
+    raise ScheduledStorageConflictError(
+        f"{detail}; choose and migrate one explicitly before using the scheduler"
+    )
 
 
 # ── Sidecar dispatch (POST to /notify on the bridge's local HTTP server) ──
