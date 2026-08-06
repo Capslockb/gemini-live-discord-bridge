@@ -42,7 +42,7 @@ SCHEDULED_LOCK = threading.Lock()
 
 
 class ScheduledStorageConflictError(RuntimeError):
-    """Raised when both legacy and configured schedule stores exist."""
+    """Raised when selected and legacy storage require explicit migration."""
 
 
 def resolve_scheduled_path(
@@ -363,8 +363,6 @@ def schedule_notification(
     dispatcher reads that file on each tick and fires due entries. It never
     migrates, merges, overwrites, or deletes a legacy store automatically.
     """
-    scheduled_path = _checked_scheduled_path()
-    scheduled_path.parent.mkdir(parents=True, exist_ok=True)
     entry = {
         "id": f"n-{int(time.time() * 1000)}-{os.getpid()}",
         "fire_at": float(fire_at),
@@ -376,6 +374,8 @@ def schedule_notification(
         "created_at": time.time(),
     }
     with SCHEDULED_LOCK:
+        scheduled_path = _checked_scheduled_path()
+        scheduled_path.parent.mkdir(parents=True, exist_ok=True)
         with scheduled_path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
     return {"status": "scheduled", "id": entry["id"], "fire_at": fire_at,
@@ -383,10 +383,10 @@ def schedule_notification(
 
 
 def list_scheduled() -> List[Dict[str, Any]]:
-    scheduled_path = _checked_scheduled_path()
-    if not scheduled_path.exists():
-        return []
     with SCHEDULED_LOCK:
+        scheduled_path = _checked_scheduled_path()
+        if not scheduled_path.exists():
+            return []
         lines = scheduled_path.read_text(encoding="utf-8", errors="replace").splitlines()
     out = []
     for line in lines:
@@ -399,27 +399,27 @@ def list_scheduled() -> List[Dict[str, Any]]:
 
 def cancel_scheduled(notif_id: str) -> bool:
     """Remove a scheduled notification by id. Returns True if removed."""
-    scheduled_path = _checked_scheduled_path()
-    if not scheduled_path.exists():
-        return False
     with SCHEDULED_LOCK:
+        scheduled_path = _checked_scheduled_path()
+        if not scheduled_path.exists():
+            return False
         lines = scheduled_path.read_text(encoding="utf-8", errors="replace").splitlines()
-    kept = []
-    removed = False
-    for line in lines:
-        try:
-            entry = json.loads(line)
-        except json.JSONDecodeError:
+        kept = []
+        removed = False
+        for line in lines:
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                kept.append(line)
+                continue
+            if entry.get("id") == notif_id:
+                removed = True
+                continue
             kept.append(line)
-            continue
-        if entry.get("id") == notif_id:
-            removed = True
-            continue
-        kept.append(line)
-    if removed:
-        with scheduled_path.open("w", encoding="utf-8") as fh:
-            fh.write("\n".join(kept) + ("\n" if kept else ""))
-    return removed
+        if removed:
+            with scheduled_path.open("w", encoding="utf-8") as fh:
+                fh.write("\n".join(kept) + ("\n" if kept else ""))
+        return removed
 
 
 # Background ticker for scheduled notifications
