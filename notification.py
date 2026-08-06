@@ -30,14 +30,71 @@ import time
 import urllib.request
 import urllib.error
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 logger = logging.getLogger("voice-notification")
 
 # Sidecar control port (same as bridge.py HTTP_PORT)
 NOTIFY_HTTP_TIMEOUT = float(os.getenv("DISCORD_VOICE_LIVE_NOTIFY_TIMEOUT", "5"))
-SCHEDULED_PATH = Path.home() / ".hermes" / "voice-scheduled-notifications.jsonl"
+SCHEDULED_FILENAME = "voice-scheduled-notifications.jsonl"
+SCHEDULED_PATH_ENV = "DISCORD_VOICE_LIVE_SCHEDULED_NOTIFICATIONS_FILE"
 SCHEDULED_LOCK = threading.Lock()
+
+
+class ScheduledStorageConflictError(RuntimeError):
+    """Raised when both legacy and configured schedule stores exist."""
+
+
+def resolve_scheduled_path(
+    *,
+    environ: Optional[Mapping[str, str]] = None,
+    home: Optional[Path] = None,
+) -> Path:
+    """Resolve scheduled-notification storage without moving existing data."""
+    env = os.environ if environ is None else environ
+    explicit_path = (env.get(SCHEDULED_PATH_ENV) or "").strip()
+    if explicit_path:
+        return Path(explicit_path).expanduser()
+
+    hermes_home = (env.get("HERMES_HOME") or "").strip()
+    if hermes_home:
+        return Path(hermes_home).expanduser() / SCHEDULED_FILENAME
+
+    home_path = Path.home() if home is None else Path(home)
+    return home_path / ".hermes" / SCHEDULED_FILENAME
+
+
+SCHEDULED_PATH = resolve_scheduled_path()
+LEGACY_SCHEDULED_PATH = Path.home() / ".hermes" / SCHEDULED_FILENAME
+_LEGACY_STORAGE_WARNING_EMITTED = False
+
+
+def _checked_scheduled_path() -> Path:
+    """Return the selected store and fail closed on ambiguous dual storage."""
+    global _LEGACY_STORAGE_WARNING_EMITTED
+
+    selected = SCHEDULED_PATH
+    legacy = LEGACY_SCHEDULED_PATH
+    if selected == legacy:
+        return selected
+
+    selected_exists = selected.exists()
+    legacy_exists = legacy.exists()
+    if selected_exists and legacy_exists:
+        raise ScheduledStorageConflictError(
+            "both configured and legacy scheduled-notification stores exist; "
+            "choose and migrate one explicitly before using the scheduler"
+        )
+
+    if legacy_exists and not _LEGACY_STORAGE_WARNING_EMITTED:
+        logger.warning(
+            "legacy scheduled-notification store remains at %s; selected store is %s; "
+            "no automatic migration was performed",
+            legacy,
+            selected,
+        )
+        _LEGACY_STORAGE_WARNING_EMITTED = True
+    return selected
 
 
 # ── Sidecar dispatch (POST to /notify on the bridge's local HTTP server) ──
@@ -315,11 +372,12 @@ def schedule_notification(
 ) -> Dict[str, Any]:
     """Queue a notification to fire at fire_at (epoch seconds).
 
-    Persistence: the queue is JSONL at SCHEDULED_PATH. The dispatcher
-    is a background thread that reads the file on each tick and fires
-    due entries. Survives process restarts.
+    Persistence: the queue is JSONL at the configured schedule path. The
+    dispatcher reads that file on each tick and fires due entries. It never
+    migrates, merges, overwrites, or deletes a legacy store automatically.
     """
-    SCHEDULED_PATH.parent.mkdir(parents=True, exist_ok=True)
+    scheduled_path = _checked_scheduled_path()
+    scheduled_path.parent.mkdir(parents=True, exist_ok=True)
     entry = {
         "id": f"n-{int(time.time() * 1000)}-{os.getpid()}",
         "fire_at": float(fire_at),
@@ -331,17 +389,18 @@ def schedule_notification(
         "created_at": time.time(),
     }
     with SCHEDULED_LOCK:
-        with SCHEDULED_PATH.open("a", encoding="utf-8") as fh:
+        with scheduled_path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
     return {"status": "scheduled", "id": entry["id"], "fire_at": fire_at,
             "in_seconds": max(0.0, fire_at - time.time())}
 
 
 def list_scheduled() -> List[Dict[str, Any]]:
-    if not SCHEDULED_PATH.exists():
+    scheduled_path = _checked_scheduled_path()
+    if not scheduled_path.exists():
         return []
     with SCHEDULED_LOCK:
-        lines = SCHEDULED_PATH.read_text(encoding="utf-8", errors="replace").splitlines()
+        lines = scheduled_path.read_text(encoding="utf-8", errors="replace").splitlines()
     out = []
     for line in lines:
         try:
@@ -353,10 +412,11 @@ def list_scheduled() -> List[Dict[str, Any]]:
 
 def cancel_scheduled(notif_id: str) -> bool:
     """Remove a scheduled notification by id. Returns True if removed."""
-    if not SCHEDULED_PATH.exists():
+    scheduled_path = _checked_scheduled_path()
+    if not scheduled_path.exists():
         return False
     with SCHEDULED_LOCK:
-        lines = SCHEDULED_PATH.read_text(encoding="utf-8", errors="replace").splitlines()
+        lines = scheduled_path.read_text(encoding="utf-8", errors="replace").splitlines()
     kept = []
     removed = False
     for line in lines:
@@ -370,7 +430,7 @@ def cancel_scheduled(notif_id: str) -> bool:
             continue
         kept.append(line)
     if removed:
-        with SCHEDULED_PATH.open("w", encoding="utf-8") as fh:
+        with scheduled_path.open("w", encoding="utf-8") as fh:
             fh.write("\n".join(kept) + ("\n" if kept else ""))
     return removed
 
@@ -398,6 +458,10 @@ def _scheduler_loop() -> None:
                     except Exception as exc:
                         logger.warning("scheduled notify fire failed: %s", exc)
                     cancel_scheduled(entry.get("id", ""))
+        except ScheduledStorageConflictError as exc:
+            logger.error("notification scheduler stopped: %s", exc)
+            _SCHEDULER_STOP.set()
+            break
         except Exception as exc:
             logger.debug("scheduler loop error: %s", exc)
         _SCHEDULER_STOP.wait(2.0)
@@ -407,10 +471,11 @@ def start_scheduler() -> None:
     global _SCHEDULER_THREAD
     if _SCHEDULER_THREAD is not None and _SCHEDULER_THREAD.is_alive():
         return
+    scheduled_path = _checked_scheduled_path()
     _SCHEDULER_STOP.clear()
     _SCHEDULER_THREAD = threading.Thread(target=_scheduler_loop, name="voice-notify-scheduler", daemon=True)
     _SCHEDULER_THREAD.start()
-    logger.info("notification scheduler started (poll=2s)")
+    logger.info("notification scheduler started (poll=2s, storage=%s)", scheduled_path)
 
 
 def stop_scheduler(timeout: float = 3.0) -> None:
