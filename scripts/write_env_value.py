@@ -81,7 +81,6 @@ def write_env_value(path, key, value):
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(str(temp_path), str(path))
-        os.chmod(str(path), 0o600)
     except Exception:
         if fd >= 0:
             os.close(fd)
