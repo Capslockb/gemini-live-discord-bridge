@@ -188,6 +188,12 @@ fi
 # ── Env var prompts ──────────────────────────────────────────────────────
 
 if [ "$NO_PROMPT" = 0 ]; then
+  CREDENTIAL_WRITER="$INSTALL_DIR/scripts/write_env_value.py"
+  if [ ! -f "$CREDENTIAL_WRITER" ]; then
+    echo "ERROR: credential writer not found at $CREDENTIAL_WRITER" >&2
+    exit 1
+  fi
+
   echo
   echo ">> Required environment variables (written to $ENV_FILE)"
   echo "   Press Enter to keep the current value (or skip if unset)."
@@ -204,11 +210,9 @@ if [ "$NO_PROMPT" = 0 ]; then
     if [ -z "$current" ]; then
       read -r -s -p "    Enter $var: " val; echo
       if [ -n "$val" ]; then
-        # Append (or update) the key
-        if grep -qE "^${var}=" "$ENV_FILE" 2>/dev/null; then
-          sed -i "s|^${var}=.*|${var}=${val}|" "$ENV_FILE"
-        else
-          echo "${var}=${val}" >> "$ENV_FILE"
+        if ! printf '%s' "$val" | "$PYTHON_BIN" "$CREDENTIAL_WRITER" "$ENV_FILE" "$var"; then
+          echo "    ERROR: unable to save $var" >&2
+          exit 1
         fi
         echo "    saved"
       else
