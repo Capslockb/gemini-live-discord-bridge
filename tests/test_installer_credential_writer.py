@@ -90,6 +90,19 @@ class TestCredentialWriter(unittest.TestCase):
         self.assertEqual(self.env_file.read_bytes(), original)
         self.assertEqual(list(self.env_file.parent.glob("..env.*")), [])
 
+    def test_success_has_no_post_replace_chmod_failure_point(self):
+        self.env_file.write_bytes(b"DISCORD_BOT_TOKEN=old\n")
+
+        with patch.object(self.writer.os, "chmod", side_effect=OSError("must not run")) as chmod_mock:
+            self.writer.write_env_value(self.env_file, "DISCORD_BOT_TOKEN", b"replacement")
+
+        chmod_mock.assert_not_called()
+        self.assertEqual(
+            self.env_file.read_bytes(),
+            b"DISCORD_BOT_TOKEN=replacement\n",
+        )
+        self.assertEqual(os.stat(self.env_file).st_mode & 0o777, 0o600)
+
     def test_cli_never_echoes_credential_on_success_or_failure(self):
         sentinel = "sentinel-&|\\-Ț-secret".encode("utf-8")
 
