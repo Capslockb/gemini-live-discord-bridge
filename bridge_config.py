@@ -309,10 +309,27 @@ BASE_SYSTEM_PROMPT = (
 )
 
 
-_SCRIPTS_DIR = Path.home() / ".hermes" / "hermes-agent" / "skills" / "productivity" / "google-workspace" / "scripts"
+def _resolve_google_api_bin() -> Path:
+    """Resolve the Google Workspace helper path from operator configuration."""
+    explicit = os.getenv("DISCORD_VOICE_LIVE_GOOGLE_API_BIN")
+    if explicit and explicit.strip():
+        return Path(explicit).expanduser()
+
+    hermes_home = os.getenv("HERMES_HOME")
+    if hermes_home and hermes_home.strip():
+        root = Path(hermes_home).expanduser()
+    else:
+        root = Path.home() / ".hermes"
+    return root / "hermes-agent" / "skills" / "productivity" / "google-workspace" / "scripts" / "google_api.py"
 
 
-GOOGLE_API_BIN = str(_SCRIPTS_DIR / "google_api.py")
+_GOOGLE_API_BIN_PATH = _resolve_google_api_bin()
+
+
+_SCRIPTS_DIR = _GOOGLE_API_BIN_PATH.parent
+
+
+GOOGLE_API_BIN = str(_GOOGLE_API_BIN_PATH)
 
 
 EMAIL_VOICE_TOOLS_ENABLED = os.getenv(
