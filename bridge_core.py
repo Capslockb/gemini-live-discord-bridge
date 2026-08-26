@@ -3,6 +3,7 @@ import ast
 import asyncio
 import base64
 import html
+import inspect
 import json
 import logging
 import os
@@ -17,7 +18,7 @@ from http import HTTPStatus
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 from urllib.request import Request, urlopen
-from typing import Any, Optional, Dict, List, Callable, Tuple
+from typing import Any, Optional, Dict, List, Callable, Tuple, Protocol
 
 import numpy as np
 logger = logging.getLogger("voice-live")
@@ -93,16 +94,29 @@ else:
     GeminiPCMSink = None
 
 
+class AudioOutput(Protocol):
+    """Transport-neutral output contract used by Discord and mobile."""
+
+    def feed(self, pcm: bytes) -> None: ...
+
+    def wake(self) -> bool: ...
+
+    def clear(self) -> None: ...
+
+
 class GeminiLiveBridge:
     AUDIO_STREAM_IDLE_END_SECONDS = float(os.getenv("GEMINI_AUDIO_STREAM_IDLE_END_SECONDS", "0.25"))
 
     def __init__(
         self,
-        output_source: LiveAudioSource,
+        output_source: AudioOutput,
         on_wake: Callable[[], None] = None,
         on_leave_request: Callable[[str], None] = None,
         on_reconnect: Callable[[], None] = None,
         user_profile: Optional[Any] = None,
+        on_event: Optional[Callable[[Dict[str, Any]], Any]] = None,
+        api_key: Optional[str] = None,
+        context_id: Optional[str] = None,
     ):
         self._ws = None
         self._output_source = output_source
@@ -122,6 +136,9 @@ class GeminiLiveBridge:
         self._on_wake = on_wake
         self._on_leave_request = on_leave_request
         self._on_reconnect = on_reconnect
+        self._on_event = on_event
+        self._api_key = api_key or GEMINI_API_KEY
+        self._context_id = context_id
         self._running = False
         self._session_handle: Optional[str] = None
         self._reconnecting = False
@@ -166,6 +183,23 @@ class GeminiLiveBridge:
             "model": None,
         }
 
+    def _emit_event(self, kind: str, **payload: Any) -> None:
+        """Emit a transport-neutral session event without affecting Discord."""
+        if self._on_event is None:
+            return
+        event: Dict[str, Any] = {
+            "kind": kind,
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "contextId": self._context_id,
+            **payload,
+        }
+        try:
+            result = self._on_event(event)
+            if inspect.isawaitable(result):
+                asyncio.get_running_loop().create_task(result)
+        except Exception:
+            logger.debug("VoiceLive transport event callback failed", exc_info=True)
+
     def _create_notes_file(self) -> Path:
         try:
             NOTES_DIR.mkdir(parents=True, exist_ok=True)
@@ -198,6 +232,7 @@ class GeminiLiveBridge:
                 self.metrics["local_interrupt_events"] = (
                     self.metrics.get("local_interrupt_events", 0) + 1
                 )
+                self._emit_event("audio.interrupted", source="local_vad")
         except Exception:
             logger.debug("local VAD clear failed in feed_audio", exc_info=True)
         _put_drop_oldest(self._send_q, pcm_16k_mono)
@@ -266,7 +301,9 @@ class GeminiLiveBridge:
 
     async def connect(self):
         import websockets
-        ws_url = f"{GEMINI_WS_URL}?key={GEMINI_API_KEY}"
+        if not self._api_key:
+            raise RuntimeError("Gemini Live key is not configured")
+        ws_url = GEMINI_WS_URL
         candidates = [GEMINI_MODEL]
         for model in GEMINI_MODEL_FALLBACKS:
             if model not in candidates:
@@ -293,11 +330,18 @@ class GeminiLiveBridge:
             asyncio.create_task(self._send_loop()),
             asyncio.create_task(self._receive_loop()),
         ]
+        self._emit_event(
+            "session.ready",
+            model=self.metrics.get("model"),
+            inputAudio={"encoding": "pcm_s16le", "sampleRate": 16000, "channels": 1},
+            outputAudio={"encoding": "pcm_s16le", "sampleRate": GEMINI_OUT_SR, "channels": GEMINI_OUT_CH},
+        )
         if INITIAL_GREETING and not self._reconnecting:
             await self.send_text(INITIAL_GREETING)
 
     async def _connect_model(self, websockets, ws_url: str, model: str, handle=None):
-        self._ws = await websockets.connect(ws_url, ping_interval=20, ping_timeout=10)
+        self._ws = await self._open_websocket(websockets, ws_url)
+
         # Per-user Honcho peer: when this bridge was created with a profile, use
         # that profile's honcho_peer_name so memory is fully isolated per user.
         # Falls back to module-level HONCHO_PEER_NAME if no profile was provided.
@@ -317,7 +361,7 @@ class GeminiLiveBridge:
         # a one-time system reminder to start the Q&A flow. The agent
         # sees this on the very first turn, calls
         # local_user_onboarding_get_questions, then walks the user
-        # through the 6 questions via local_user_onboarding_answer.
+        # through the 6 questions via voice.
         try:
             if self._user_profile is not None and self._user_profile.needs_onboarding():
                 from user_profiles import ONBOARDING_QUESTIONS
@@ -334,6 +378,7 @@ class GeminiLiveBridge:
                 )
         except Exception:
             pass
+
         # #28: Mirror user's speech/communication preferences. Inject the
         # user's declared communication_style and pet_peeves (captured
         # during #32 onboarding) into the system prompt so the agent
@@ -482,6 +527,20 @@ class GeminiLiveBridge:
                 return
         raise RuntimeError(f"Gemini setup ended before setupComplete for {model}")
 
+    async def _open_websocket(self, websockets, ws_url: str):
+        # Google APIs accept the key in x-goog-api-key. Keeping it out of the
+        # URL prevents exception strings and proxy logs from recording it.
+        return await websockets.connect(
+            ws_url,
+            additional_headers=self._provider_headers(),
+            ping_interval=20,
+            ping_timeout=10,
+        )
+
+    def _provider_headers(self) -> Dict[str, str]:
+        """Build in-memory provider authentication without URL credentials."""
+        return {"x-goog-api-key": self._api_key}
+
     async def send_text(self, text: str) -> None:
         if not self._ws or not text.strip():
             return
@@ -503,6 +562,8 @@ class GeminiLiveBridge:
                 await asyncio.wait_for(self._ws.close(), timeout=2.0)
             except asyncio.TimeoutError:
                 pass
+        if self._user_disconnect:
+            self._emit_event("session.ended", reason="client_closed")
 
     async def _restart(self):
         if self._reconnecting or self._user_disconnect:
@@ -510,6 +571,7 @@ class GeminiLiveBridge:
         self._reconnecting = True
         self._reconnect_count += 1
         logger.info("Gemini Live: starting reconnect #%d...", self._reconnect_count)
+        self._emit_event("session.reconnecting", reconnectCount=self._reconnect_count)
         await self.disconnect()
         try:
             await asyncio.wait_for(asyncio.gather(*self._tasks, return_exceptions=True), timeout=3.0)
@@ -537,9 +599,16 @@ class GeminiLiveBridge:
                     self._on_reconnect()
                 except Exception:
                     pass
+            self._emit_event("session.reconnected", reconnectCount=self._reconnect_count)
             logger.info("Gemini Live: reconnected successfully #%d (handle=%s)", self._reconnect_count, self._session_handle)
         except Exception as e:
             logger.error("Gemini Live: reconnect failed #%d: %s", self._reconnect_count, e)
+            self._emit_event(
+                "session.error",
+                code="reconnect_failed",
+                summary="SORA Live could not reconnect",
+                retryable=False,
+            )
             if self._on_leave_request and not self._user_disconnect:
                 try:
                     self._on_leave_request("Gemini reconnect failed: %s" % e)
@@ -660,6 +729,7 @@ class GeminiLiveBridge:
                                 pcm_bytes = _fade_in_pcm_24k_mono(pcm_bytes, OUTPUT_FADE_IN_MS)
                                 self._output_turn_open = True
                                 self.metrics["audio_preroll_events"] += 1
+                                self._emit_event("audio.started")
                             if self._output_source.wake():
                                 self._output_source.feed(pcm_bytes)
                                 if self._on_wake:
@@ -673,10 +743,12 @@ class GeminiLiveBridge:
                     if OUTPUT_CLEAR_ON_INTERRUPT:
                         self._output_source.clear()
                     self._output_turn_open = False
+                    self._emit_event("audio.interrupted", source="server")
                 if sc.get("turnComplete") or sc.get("generationComplete"):
                     if self._output_turn_open and OUTPUT_TAIL_PAD_MS > 0:
                         self._output_source.feed(_silence_pcm(GEMINI_OUT_SR, GEMINI_OUT_CH, OUTPUT_TAIL_PAD_MS))
                     self._output_turn_open = False
+                    self._emit_event("turn.completed")
             # ── Handle tool calls from Gemini ──────────────────────────────────────
             tool_call = msg.get("toolCall")
             if tool_call:
@@ -686,7 +758,8 @@ class GeminiLiveBridge:
                     logger.exception("Gemini Live: tool call handler crashed (recv loop continues): %s", tc_exc)
             tool_call_cancel = msg.get("toolCallCancellation")
             if tool_call_cancel:
-                logger.info("Gemini toolCallCancellation received (ignored): %s", tool_call_cancel)
+                logger.info("Gemini toolCallCancellation received")
+                self._emit_event("tool.cancelled")
 
     def _log_server_content_shape(self, server_content: Dict[str, Any]) -> None:
         keys = tuple(sorted(server_content.keys()))
@@ -701,6 +774,11 @@ class GeminiLiveBridge:
         text = str(payload.get("text") or "").strip()
         if not text:
             return
+        self._emit_event(
+            "transcript.user" if direction == "input" else "transcript.sora",
+            text=text,
+            final=bool(payload.get("finished") or payload.get("final")),
+        )
         metric_prefix = f"{direction}_transcript"
         self.metrics[f"{metric_prefix}_events"] += 1
         self.metrics[f"last_{metric_prefix}"] = text[-500:]
@@ -766,9 +844,10 @@ class GeminiLiveBridge:
                 call_id = fc.get("id", "")
                 name = fc.get("name", "")
                 args = fc.get("args", {})
+                self._emit_event("tool.started", callId=call_id, name=name)
                 if name.startswith("web_") and isinstance(args, dict):
                     args = _normalize_voice_web_args(name, args)
-                logger.info("Gemini tool call: %s id=%s args=%s", name, call_id, args)
+                logger.info("Gemini tool call: %s id=%s", name, call_id)
                 # Webhook: tool.called event (throttled)
                 try:
                     from webhook_dispatcher import emit_tool_called
@@ -784,6 +863,7 @@ class GeminiLiveBridge:
                         if not self._user_profile.is_tool_allowed(name):
                             result = {"error": f"Tool '{name}' is not enabled for this user"}
                             responses.append({"id": call_id, "name": name, "response": result})
+                            self._emit_event("tool.failed", callId=call_id, name=name)
                             continue
                     except Exception:
                         pass
@@ -812,6 +892,11 @@ class GeminiLiveBridge:
                 except Exception as exc:
                     logger.exception("Gemini Live: tool %s crashed", name)
                     result = {"error": f"{type(exc).__name__}: {exc}"}
+                self._emit_event(
+                    "tool.failed" if isinstance(result, dict) and result.get("error") else "tool.completed",
+                    callId=call_id,
+                    name=name,
+                )
                 responses.append({
                     "id": call_id,
                     "name": name,
