@@ -102,6 +102,25 @@ class TestMobileRealtimeTransport(unittest.TestCase):
         self.assertFalse(bridge.profile.is_tool_allowed("not_permitted"))
         self.assertTrue(bridge.disconnected)
 
+    def test_canonical_playback_interrupted_frame_keeps_session_alive(self):
+        headers = {"Authorization": "Bearer internal-test-token"}
+        with self.client.websocket_connect("/v1/realtime", headers=headers) as ws:
+            ws.send_json(
+                {
+                    "type": "session.start",
+                    "contextId": "ctx-mobile-interrupt",
+                    "providerKey": "p" * 32,
+                }
+            )
+            self.assertEqual(ws.receive_json()["kind"], "session.ready")
+            self.assertTrue(ws.receive_bytes())
+            ws.send_json({"type": "playback.interrupted"})
+            ws.send_json({"type": "text.send", "text": "session survived"})
+            ws.send_json({"type": "session.end"})
+
+        bridge = FakeBridge.instances[-1]
+        self.assertEqual(bridge.text, ["session survived"])
+
     def test_malformed_session_never_echoes_provider_value(self):
         headers = {"Authorization": "Bearer internal-test-token"}
         with self.client.websocket_connect("/v1/realtime", headers=headers) as ws:

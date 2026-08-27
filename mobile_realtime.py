@@ -191,7 +191,7 @@ async def _receive_loop(websocket: WebSocket, bridge: Any, output: MobileAudioOu
             muted = True
         elif kind == "mic.unmute":
             muted = False
-        elif kind == "playback.interrupt":
+        elif kind in {"playback.interrupted", "playback.interrupt"}:
             output.clear()
         elif kind == "text.send":
             value = control.get("text")
