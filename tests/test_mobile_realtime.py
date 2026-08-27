@@ -18,6 +18,7 @@ class FakeBridge:
         self.api_key = kwargs["api_key"]
         self.context_id = kwargs["context_id"]
         self.profile = kwargs["user_profile"]
+        self.output_echo_guard = bool(kwargs.get("output_echo_guard"))
         self.audio: list[bytes] = []
         self.text: list[str] = []
         self.video: list[tuple[bytes, str]] = []
@@ -100,6 +101,7 @@ class TestMobileRealtimeTransport(unittest.TestCase):
         self.assertEqual(bridge.video, [(frame, "image/jpeg")])
         self.assertTrue(bridge.profile.is_tool_allowed("web_search"))
         self.assertFalse(bridge.profile.is_tool_allowed("not_permitted"))
+        self.assertTrue(bridge.output_echo_guard)
         self.assertTrue(bridge.disconnected)
 
     def test_canonical_playback_interrupted_frame_keeps_session_alive(self):

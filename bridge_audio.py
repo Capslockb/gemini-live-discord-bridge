@@ -213,6 +213,28 @@ def _has_speech_energy_16k(pcm_16k_mono: bytes) -> bool:
     return peak >= 400
 
 
+def _has_barge_in_energy_16k(
+    pcm_16k_mono: bytes,
+    *,
+    min_peak: int = 2200,
+    min_rms: int = 850,
+) -> bool:
+    """Reject low playback residue while retaining normal close-mic speech."""
+    if not pcm_16k_mono or len(pcm_16k_mono) < 2:
+        return False
+    samples = memoryview(pcm_16k_mono).cast("h")
+    if not samples:
+        return False
+    peak = 0
+    square_sum = 0
+    for sample in samples:
+        absolute = -sample if sample < 0 else sample
+        if absolute > peak:
+            peak = absolute
+        square_sum += sample * sample
+    return peak >= min_peak and square_sum >= len(samples) * min_rms * min_rms
+
+
 try:
     import discord as _discord_audio
     _AudioSourceBase = _discord_audio.AudioSource

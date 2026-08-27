@@ -22,7 +22,7 @@ from typing import Any, Optional, Dict, List, Callable, Tuple, Protocol
 
 import numpy as np
 logger = logging.getLogger("voice-live")
-from bridge_audio import LiveAudioSource, _fade_in_pcm_24k_mono, _has_speech_energy, _has_speech_energy_16k, _put_drop_oldest, _silence_pcm, downsample_for_gemini, generate_typing_pcm
+from bridge_audio import LiveAudioSource, _fade_in_pcm_24k_mono, _has_barge_in_energy_16k, _has_speech_energy, _has_speech_energy_16k, _put_drop_oldest, _silence_pcm, downsample_for_gemini, generate_typing_pcm
 from bridge_config import ALLOWED_SPEAKER_IDS, AUTO_LEAVE_MIN_UPTIME_SECONDS, AUTO_LEAVE_QUIET_SECONDS, BASE_SYSTEM_PROMPT, GEMINI_API_KEY, GEMINI_MODEL, GEMINI_MODEL_FALLBACKS, GEMINI_OUT_CH, GEMINI_OUT_SR, GEMINI_VOICE_NAME, GEMINI_WS_URL, GITHUB_VOICE_TOOLS_ENABLED, IDLE_PROMPT_GRACE_SECONDS, IDLE_PROMPT_SECONDS, IDLE_PROMPT_TEXT, INITIAL_GREETING, NOTES_DIR, OUTPUT_CLEAR_ON_INTERRUPT, OUTPUT_FADE_IN_MS, OUTPUT_PREROLL_MS, OUTPUT_TAIL_PAD_MS, SPOTIFY_VOICE_TOOLS_ENABLED, TYPING_SOUND_ENABLED, VIDEO_ENABLED, VIDEO_INITIALIZED_QUIET_THRESHOLD_S, VIDEO_MAX_BYTES, VIDEO_MAX_FPS, VIDEO_WHEN_RECENT_AUDIO_SECONDS, VOICE_LEAVE_PHRASES, WEB_VOICE_TOOLS_ENABLED
 from bridge_context import _build_honcho_context
 from bridge_opencode import OPENCODE_VOICE_TOOLS_ENABLED, _OPENCODE_FUNCTION_DECLARATIONS, _run_opencode_tool_with_bridge
@@ -145,6 +145,7 @@ class GeminiLiveBridge:
         on_event: Optional[Callable[[Dict[str, Any]], Any]] = None,
         api_key: Optional[str] = None,
         context_id: Optional[str] = None,
+        output_echo_guard: bool = False,
     ):
         self._ws = None
         self._output_source = output_source
@@ -167,6 +168,9 @@ class GeminiLiveBridge:
         self._on_event = on_event
         self._api_key = api_key or GEMINI_API_KEY
         self._context_id = context_id
+        self._output_echo_guard = output_echo_guard
+        self._output_echo_guard_confirm_frames = 4
+        self._output_echo_guard_pending: List[bytes] = []
         self._running = False
         self._session_handle: Optional[str] = None
         self._reconnecting = False
@@ -196,6 +200,9 @@ class GeminiLiveBridge:
         self.metrics: Dict[str, Any] = {
             "audio_in_chunks": 0,
             "audio_in_dropped_chunks": 0,
+            "audio_echo_guard_dropped_chunks": 0,
+            "audio_echo_guard_held_chunks": 0,
+            "audio_echo_guard_confirmed_events": 0,
             "audio_out_chunks": 0,
             "audio_out_bytes": 0,
             "audio_stream_end_events": 0,
@@ -244,6 +251,27 @@ class GeminiLiveBridge:
     def feed_audio(self, pcm_16k_mono: bytes) -> None:
         self.metrics["audio_in_chunks"] += 1
         self.metrics["last_input_monotonic"] = time.monotonic()
+        confirmed_frames: List[bytes] = []
+        if self._output_echo_guard:
+            if self._output_turn_open:
+                if not _has_barge_in_energy_16k(pcm_16k_mono):
+                    self.metrics["audio_echo_guard_dropped_chunks"] += (
+                        len(self._output_echo_guard_pending) + 1
+                    )
+                    self._output_echo_guard_pending.clear()
+                    return
+                self._output_echo_guard_pending.append(bytes(pcm_16k_mono))
+                self.metrics["audio_echo_guard_held_chunks"] += 1
+                if (
+                    len(self._output_echo_guard_pending)
+                    < self._output_echo_guard_confirm_frames
+                ):
+                    return
+                confirmed_frames = self._output_echo_guard_pending[:]
+                self._output_echo_guard_pending.clear()
+                self.metrics["audio_echo_guard_confirmed_events"] += 1
+            else:
+                self._output_echo_guard_pending.clear()
         # Local hard-clear: if user audio has speech energy AND the model is
         # currently producing output, force-clear the output buffer locally
         # instead of waiting for Gemini's WSS round-trip of the
@@ -268,7 +296,11 @@ class GeminiLiveBridge:
                 self._emit_event("audio.interrupted", source="local_vad")
         except Exception:
             logger.debug("local VAD clear failed in feed_audio", exc_info=True)
-        _put_drop_oldest(self._send_q, pcm_16k_mono)
+        if confirmed_frames:
+            for frame in confirmed_frames:
+                _put_drop_oldest(self._send_q, frame)
+        else:
+            _put_drop_oldest(self._send_q, pcm_16k_mono)
 
     def feed_video_frame(self, data: bytes, mime_type: str, force: bool = False,
                          source: str = "") -> Dict[str, Any]:

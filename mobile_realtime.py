@@ -281,6 +281,7 @@ def create_mobile_realtime_app(
                 api_key=provider_key,
                 context_id=context_id,
                 user_profile=MobileUserProfile(allowed_tools, peer_name),
+                output_echo_guard=True,
             )
             if bridge is None:
                 raise RuntimeError("Realtime bridge factory returned no session")

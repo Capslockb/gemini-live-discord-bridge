@@ -22,6 +22,7 @@ import logging
 import os
 import threading
 import wave
+import weakref
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -176,32 +177,43 @@ def invalidate_cache(slot: Optional[str] = None) -> None:
 # owned by a VoiceLiveBridge. Multiple bridges can be active (per-user).
 # We track the most-recently-active source by weakref.
 
-_ACTIVE_SOURCES: Dict[str, Any] = {}  # session_id → (weakref to source, ts)
+_ACTIVE_SOURCES: Dict[str, weakref.ReferenceType[Any]] = {}
 _ACTIVE_LOCK = threading.Lock()
 
 
 def register_active_source(session_id: str, source: Any) -> None:
     """Mark `source` as the active output for `session_id`. Auto-cleans
     when the source is GC'd."""
-    import weakref
+    if source is None:
+        return
+
+    def forget(expired: weakref.ReferenceType[Any]) -> None:
+        _forget(session_id, expired)
+
+    source_ref = weakref.ref(source, forget)
     with _ACTIVE_LOCK:
-        if source is not None:
-            _ACTIVE_SOURCES[session_id] = (weakref.ref(source, lambda ref, sid=session_id: _forget(sid)), source)
+        _ACTIVE_SOURCES[session_id] = source_ref
 
 
-def _forget(session_id: str) -> None:
+def _forget(
+    session_id: str,
+    expired: Optional[weakref.ReferenceType[Any]] = None,
+) -> None:
     with _ACTIVE_LOCK:
-        _ACTIVE_SOURCES.pop(session_id, None)
+        current = _ACTIVE_SOURCES.get(session_id)
+        if expired is None or current is expired:
+            _ACTIVE_SOURCES.pop(session_id, None)
 
 
 def pick_active_source() -> Optional[Any]:
     """Return a live (non-GC'd) source from the registry, or None."""
     with _ACTIVE_LOCK:
-        for sid, (ref, src) in list(_ACTIVE_SOURCES.items()):
-            if ref() is None:
+        for sid, source_ref in list(_ACTIVE_SOURCES.items()):
+            source = source_ref()
+            if source is None:
                 _ACTIVE_SOURCES.pop(sid, None)
                 continue
-            return src
+            return source
         return None
 
 
