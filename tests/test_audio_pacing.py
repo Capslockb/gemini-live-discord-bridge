@@ -39,18 +39,24 @@ def test_drop_audio_backlog_discards_oldest_frames() -> None:
     assert [queue.get_nowait() for _ in range(3)] == [b"\x03", b"\x04", b"\x05"]
 
 
-def test_mobile_transport_disables_websocket_frame_debug_logging() -> None:
-    client_logger = logging.getLogger("websockets.client")
-    server_logger = logging.getLogger("websockets.server")
-    original_levels = (client_logger.level, server_logger.level)
+def test_mobile_transport_disables_chatty_realtime_debug_logging() -> None:
+    expected = {
+        "websockets.client": logging.WARNING,
+        "websockets.server": logging.WARNING,
+        "httpcore": logging.WARNING,
+        "httpx": logging.WARNING,
+        "urllib3": logging.WARNING,
+        "hermes_cli.plugins": logging.INFO,
+    }
+    originals = {name: logging.getLogger(name).level for name in expected}
     try:
-        client_logger.setLevel(logging.DEBUG)
-        server_logger.setLevel(logging.DEBUG)
+        for name in expected:
+            logging.getLogger(name).setLevel(logging.DEBUG)
 
         configure_safe_transport_logging()
 
-        assert client_logger.level == logging.WARNING
-        assert server_logger.level == logging.WARNING
+        for name, level in expected.items():
+            assert logging.getLogger(name).level == level
     finally:
-        client_logger.setLevel(original_levels[0])
-        server_logger.setLevel(original_levels[1])
+        for name, level in originals.items():
+            logging.getLogger(name).setLevel(level)

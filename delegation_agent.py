@@ -21,11 +21,14 @@ Flow:
   10. Spawns CLI, reports session_id, watcher fires on progress
 """
 
+import base64
 import json
 import logging
 import os
 import re
+import shutil
 import subprocess
+import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -109,11 +112,11 @@ _RATE_LIMIT_CAPS = {
 # failed, persistent error in tmux log), the next delegation on that
 # platform auto-routes to the first healthy neighbor in this list.
 _FALLBACK_CHAIN: Dict[str, List[str]] = {
-    "codex":       ["opencode", "hermes-api", "gemini"],
-    "opencode":    ["codex", "hermes-api", "gemini"],
-    "numasec":     ["opencode", "codex", "hermes-api"],
-    "gemini":      ["opencode", "codex", "hermes-api"],
-    "hermes-api":  ["opencode", "codex", "gemini"],
+    "codex":       ["opencode"],
+    "opencode":    ["codex"],
+    "numasec":     ["opencode", "codex"],
+    "gemini":      ["opencode", "codex"],
+    "hermes-api":  ["opencode", "codex"],
 }
 
 # Marked-broken platforms persist to disk so the flag survives bridge
@@ -224,6 +227,8 @@ _BROKEN_LOG_PATTERNS = [
     re.compile(r"\bconnection\s+refused\b", re.I),
     re.compile(r"\b(?:ollama|openrouter)\s+(?:error|unavailable)\b", re.I),
     re.compile(r"\b(?:free\s*tier|quota)\s+exceeded\b", re.I),
+    re.compile(r"\brequires?\s+(?:a\s+)?subscription\b|\bextra\s+usage\b", re.I),
+    re.compile(r"^\s*opencode\s+run\s+\[message\.\.\]", re.I | re.M),
     re.compile(r"^\s*Traceback\s+\(most recent call last\)", re.M),
 ]
 
@@ -242,6 +247,287 @@ def detect_broken_log(log_path: str, head_bytes: int = 4096) -> Optional[str]:
                 return f"log matched {pat.pattern!r}: {snippet[:120]}"
     except Exception as exc:
         logger.debug("detect_broken_log: %s", exc)
+    return None
+
+
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+_SENSITIVE_LOG_RE = re.compile(
+    r"(?i)\b(api[_-]?key|access[_-]?token|refresh[_-]?token|token|secret|password|authorization)"
+    r"(\s*[:=]\s*)(\S+)"
+)
+_BEARER_LOG_RE = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/-]{8,}=*")
+_KEY_SHAPE_RE = re.compile(r"\b(?:AIza[0-9A-Za-z_-]{20,}|sk-[0-9A-Za-z_-]{16,})\b")
+
+
+def _sanitize_delegation_output(text: str, max_chars: int = 1600) -> str:
+    cleaned = _ANSI_ESCAPE_RE.sub("", text).replace("\x00", "")
+    cleaned = _SENSITIVE_LOG_RE.sub(lambda m: f"{m.group(1)}{m.group(2)}[REDACTED]", cleaned)
+    cleaned = _BEARER_LOG_RE.sub("Bearer [REDACTED]", cleaned)
+    cleaned = _KEY_SHAPE_RE.sub("[REDACTED]", cleaned)
+    return cleaned[-max_chars:].strip()
+
+
+def _tmux_window_active(window_name: str) -> bool:
+    if not window_name:
+        return False
+    try:
+        result = subprocess.run(
+            ["tmux", "list-windows", "-t", "delegate", "-F", "#{window_name}"],
+            capture_output=True,
+            text=True,
+        )
+    except OSError as exc:
+        raise RuntimeError("could not inspect delegation tmux state") from exc
+    if result.returncode != 0:
+        error = str(result.stderr or "").lower()
+        if any(marker in error for marker in ("no server running", "can't find session", "no such session")):
+            return False
+        raise RuntimeError("could not inspect delegation tmux state")
+    return window_name in {line.strip() for line in result.stdout.splitlines()}
+
+
+def _stop_delegation_window(result: Dict[str, Any]) -> bool:
+    """Stop an original worker and prove it is inactive before fallback."""
+    window = str(result.get("tmux_window") or "")
+    if not window:
+        return True
+    subprocess.run(
+        ["tmux", "kill-window", "-t", f"delegate:{window}"],
+        capture_output=True,
+        text=True,
+    )
+    try:
+        stopped = not _tmux_window_active(window)
+        if stopped:
+            _cleanup_ephemeral_state(result)
+        return stopped
+    except (OSError, RuntimeError, subprocess.SubprocessError):
+        return False
+
+
+def _cleanup_ephemeral_state(result: Dict[str, Any]) -> None:
+    value = str(result.get("ephemeral_state_path") or "")
+    if not value:
+        return
+    root = Path(os.getenv("SORA_DELEGATION_STATE_ROOT", "/tmp/sora-live-delegation-state")).resolve()
+    path = Path(value).resolve()
+    if path != root and root in path.parents:
+        shutil.rmtree(path, ignore_errors=True)
+
+
+def _prepare_opencode_state(session_id: str) -> tuple[Path, Path]:
+    source = Path(
+        os.getenv("SORA_OPENCODE_DATA_DIR", str(Path.home() / ".local" / "share" / "opencode")),
+    ).expanduser().resolve()
+    if not source.is_dir():
+        raise OSError("OpenCode data directory is unavailable")
+    root = Path(os.getenv("SORA_DELEGATION_STATE_ROOT", "/tmp/sora-live-delegation-state")).expanduser().resolve()
+    root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    root.chmod(0o700)
+    cutoff = time.time() - 3600
+    for stale in root.iterdir():
+        try:
+            if stale.is_dir() and stale.stat().st_mtime < cutoff:
+                shutil.rmtree(stale, ignore_errors=True)
+        except OSError:
+            continue
+    safe_session = re.sub(r"[^A-Za-z0-9._-]+", "-", session_id).strip("-.")[:64] or "session"
+    state = Path(tempfile.mkdtemp(prefix=f"{safe_session}-", dir=root))
+    state.chmod(0o700)
+    for name in ("auth.json", "account.json"):
+        credential = source / name
+        if credential.is_file():
+            destination = state / name
+            shutil.copyfile(credential, destination)
+            destination.chmod(0o600)
+    return source, state
+
+
+def _prepare_delegation_run_files(platform: str, session_id: str) -> Dict[str, str]:
+    """Create unpredictable, owner-only runtime artifacts for one delegation."""
+    root = Path(
+        os.getenv("SORA_DELEGATION_RUN_ROOT", "/tmp/sora-live-delegation-runs"),
+    ).expanduser().resolve()
+    root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    root.chmod(0o700)
+    cutoff = time.time() - 86_400
+    for stale in root.iterdir():
+        try:
+            if stale.is_dir() and stale.stat().st_mtime < cutoff:
+                shutil.rmtree(stale, ignore_errors=True)
+        except OSError:
+            continue
+    safe_platform = re.sub(r"[^A-Za-z0-9_-]+", "-", platform).strip("-")[:24] or "agent"
+    safe_session = re.sub(r"[^A-Za-z0-9_-]+", "-", session_id).strip("-")[:40] or "session"
+    run_dir = Path(tempfile.mkdtemp(prefix=f"{safe_platform}-{safe_session}-", dir=root))
+    run_dir.chmod(0o700)
+    log_path = run_dir / "output.log"
+    status_path = run_dir / "output.log.status"
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    for artifact in (log_path, status_path):
+        fd = os.open(artifact, flags, 0o600)
+        try:
+            os.fchmod(fd, 0o600)
+        finally:
+            os.close(fd)
+    return {
+        "run_dir": str(run_dir),
+        "log_path": str(log_path),
+        "status_path": str(status_path),
+    }
+
+
+def _record_delegation(result: Dict[str, Any]) -> None:
+    session_id = str(result.get("session_id") or "")
+    if not is_valid_session_id(session_id):
+        return
+    snapshot = dict(result)
+    _ACTIVE_DELEGATIONS[session_id] = snapshot
+    run_dir_raw = str(snapshot.get("run_dir") or "")
+    if not run_dir_raw:
+        return
+    run_dir = Path(run_dir_raw).resolve()
+    metadata = run_dir / "metadata.json"
+    safe = {
+        key: snapshot[key]
+        for key in (
+            "session_id",
+            "active_platform",
+            "tmux_window",
+            "log_path",
+            "status_path",
+            "run_dir",
+        )
+        if key in snapshot
+    }
+    try:
+        fd = os.open(
+            metadata,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+        )
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(safe, handle, separators=(",", ":"))
+            handle.write("\n")
+    except OSError:
+        return
+
+
+def lookup_delegation(session_id: str, platform: str) -> Optional[Dict[str, Any]]:
+    """Find a recorded delegation without reconstructing attacker-guessable paths."""
+    if not is_valid_session_id(session_id) or platform not in {"opencode", "codex"}:
+        return None
+    active = _ACTIVE_DELEGATIONS.get(session_id)
+    if active and str(active.get("active_platform") or platform) == platform:
+        return dict(active)
+    root = Path(
+        os.getenv("SORA_DELEGATION_RUN_ROOT", "/tmp/sora-live-delegation-runs"),
+    ).expanduser().resolve()
+    if not root.is_dir():
+        return None
+    try:
+        candidates = sorted(root.iterdir(), key=lambda item: item.stat().st_mtime, reverse=True)[:256]
+    except OSError:
+        return None
+    for run_dir in candidates:
+        metadata = run_dir / "metadata.json"
+        try:
+            if not run_dir.is_dir() or run_dir.parent != root or metadata.is_symlink():
+                continue
+            value = json.loads(metadata.read_text(encoding="utf-8"))
+            if value.get("session_id") != session_id or value.get("active_platform") != platform:
+                continue
+            for key in ("log_path", "status_path"):
+                target = Path(str(value.get(key) or "")).resolve()
+                if target.parent != run_dir.resolve():
+                    raise ValueError("delegation metadata escaped its private run directory")
+            return value
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            continue
+    return None
+
+
+def observe_delegation(
+    result: Dict[str, Any],
+    *,
+    wait_seconds: float = 3.0,
+) -> Dict[str, Any]:
+    """Read back a spawned delegation before reporting success to Live."""
+    observed = dict(result)
+    log_path = str(observed.get("log_path") or "")
+    status_path = str(observed.get("status_path") or (f"{log_path}.status" if log_path else ""))
+    window = str(observed.get("tmux_window") or "")
+    if not log_path:
+        return observed
+
+    deadline = time.monotonic() + max(0.0, min(wait_seconds, 15.0))
+    try:
+        while _tmux_window_active(window) and time.monotonic() < deadline:
+            time.sleep(0.2)
+    except RuntimeError:
+        observed["status"] = "failed"
+        observed["error"] = "delegation state could not be inspected"
+        return observed
+
+    path = Path(log_path)
+    text = path.read_text(errors="replace") if path.exists() else ""
+    output_tail = _sanitize_delegation_output(text)
+    try:
+        active = _tmux_window_active(window)
+    except RuntimeError:
+        observed["status"] = "failed"
+        observed["error"] = "delegation state could not be inspected"
+        if output_tail:
+            observed["output_tail"] = output_tail
+        return observed
+    exit_code: Optional[int] = None
+    if status_path:
+        try:
+            raw_status = Path(status_path).read_text(encoding="utf-8").strip()
+            exit_code = int(raw_status)
+        except (FileNotFoundError, OSError, ValueError):
+            exit_code = None
+    if output_tail:
+        observed["output_tail"] = output_tail
+    if active:
+        observed["status"] = "running"
+    elif exit_code == 0:
+        observed["status"] = "completed"
+        observed["exit_code"] = 0
+    elif exit_code is not None:
+        observed["status"] = "failed"
+        observed["exit_code"] = exit_code
+        observed["error"] = f"delegation exited with code {exit_code}"
+    else:
+        observed["status"] = "failed"
+        observed["error"] = "delegation exited without a completion marker"
+    return observed
+
+
+def preflight_platform(platform: str) -> Optional[str]:
+    """Return a safe reason for failures provable without launching a task."""
+    info = PLATFORMS.get(platform) or {}
+    binary = info.get("binary")
+    if binary and not Path(str(binary)).exists():
+        return f"{platform} binary is unavailable"
+    if platform != "codex":
+        return None
+
+    auth_home = Path(os.getenv("CODEX_HOME", str(Path.home() / ".codex")))
+    try:
+        auth = json.loads((auth_home / "auth.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return "Codex authentication is missing"
+    token = str((auth.get("tokens") or {}).get("access_token") or "")
+    try:
+        encoded = token.split(".")[1]
+        encoded += "=" * (-len(encoded) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(encoded).decode("utf-8"))
+        expires_at = float(payload.get("exp") or 0)
+    except (IndexError, ValueError, TypeError, json.JSONDecodeError):
+        return None
+    if expires_at and expires_at <= time.time() + 30:
+        return "Codex access token is expired; interactive login is required"
     return None
 
 
@@ -277,6 +563,29 @@ def execute_with_fallback(
             "health": get_health_snapshot(),
         }
 
+    preflight_error = preflight_platform(platform)
+    if preflight_error:
+        mark_platform_broken(platform, preflight_error)
+        neighbor = choose_fallback(platform)
+        if neighbor:
+            inner = execute_with_fallback(
+                prompt,
+                neighbor,
+                session_id + "-fb",
+                workdir,
+                health_check_delay,
+            )
+            inner["requested_platform"] = platform
+            inner["active_platform"] = inner.get("active_platform", neighbor)
+            inner["fallback_from"] = platform
+            inner["fallback_reason"] = preflight_error
+            return inner
+        return {
+            "error": preflight_error,
+            "requested_platform": platform,
+            "active_platform": platform,
+        }
+
     result = execute_delegation(prompt, platform, session_id, workdir)
     if "error" in result:
         # Hard error before tmux spawn — treat as broken, try neighbor
@@ -299,20 +608,34 @@ def execute_with_fallback(
 
     log_path = result.get("log_path")
     if log_path and health_check_delay > 0:
-        # Wait for early signs of trouble
+        # Never infer process failure from free-form output while a worker is
+        # running or after it wrote a successful completion marker. Reviewed
+        # text may legitimately quote the same error phrases we detect.
         time.sleep(health_check_delay)
-        reason = detect_broken_log(log_path)
+        observed = observe_delegation(result, wait_seconds=0)
+        observed.setdefault("requested_platform", platform)
+        observed.setdefault("active_platform", platform)
+        if observed.get("status") in {"running", "completed"}:
+            return observed
+        if observed.get("exit_code") is None:
+            return observed
+        reason = detect_broken_log(str(log_path))
         if reason:
             mark_platform_broken(platform, reason)
             neighbor = choose_fallback(platform)
             if neighbor:
+                if not _stop_delegation_window(result):
+                    observed["status"] = "failed"
+                    observed["error"] = "original delegation could not be stopped; fallback was not launched"
+                    observed["health_warning"] = reason
+                    return observed
                 inner = execute_with_fallback(prompt, neighbor, session_id + "-fb", workdir, health_check_delay)
                 inner["fallback_from"] = platform
                 inner["fallback_reason"] = reason
                 inner["original_log_path"] = log_path
                 return inner
-            # No healthy neighbor — keep the original (still useful) result
-            result["health_warning"] = reason
+            observed["health_warning"] = reason
+        return observed
 
     result.setdefault("requested_platform", platform)
     result.setdefault("active_platform", platform)
@@ -414,9 +737,8 @@ def assemble_prompt(
     if platform == "codex":
         prompt_parts.append("")
         prompt_parts.append("## Codex-specific")
-        prompt_parts.append("- Run in full-auto mode with auto-approve where safe.")
+        prompt_parts.append("- Stay inside the configured workspace-write sandbox.")
         prompt_parts.append("- After each change, verify the file compiles.")
-        prompt_parts.append("- Use --yolo for low-risk operations.")
     elif platform == "opencode":
         prompt_parts.append("")
         prompt_parts.append("## OpenCode-specific")
@@ -443,6 +765,29 @@ def assemble_prompt(
 
 # ── CLI execution ────────────────────────────────────────────────────────
 _ACTIVE_DELEGATIONS: Dict[str, Dict[str, Any]] = {}
+_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$")
+
+
+def is_valid_session_id(session_id: str) -> bool:
+    return bool(_SESSION_ID_RE.fullmatch(session_id)) and session_id not in {".", ".."}
+
+
+def _delegation_roots() -> tuple[Path, tuple[Path, ...]]:
+    scratch = Path(os.getenv("SORA_DELEGATION_SCRATCH_ROOT", "/tmp/sora-live-delegations")).expanduser().resolve()
+    configured = os.getenv("SORA_DELEGATION_ALLOWED_ROOTS", "")
+    roots = [scratch]
+    for raw in configured.split(os.pathsep):
+        value = raw.strip()
+        if not value:
+            continue
+        candidate = Path(value).expanduser().resolve()
+        if candidate.is_dir() and candidate not in roots:
+            roots.append(candidate)
+    return scratch, tuple(roots)
+
+
+def _inside_allowed_root(path: Path, roots: tuple[Path, ...]) -> bool:
+    return any(path == root or root in path.parents for root in roots)
 
 
 def execute_delegation(
@@ -456,39 +801,122 @@ def execute_delegation(
     For CLI platforms, spawns a subprocess (background) or tmux window.
     For hermes-api, sends an HTTP POST to the Hermes API server.
     """
+    if not is_valid_session_id(session_id):
+        return {"error": "invalid delegation session_id"}
     platform_info = PLATFORMS.get(platform)
     if not platform_info:
         return {"error": f"Unknown platform: {platform}"}
 
-    workdir = workdir or os.getenv("HOME", "/home/caps")
+    scratch_root, allowed_roots = _delegation_roots()
+    if workdir:
+        resolved_workdir = Path(workdir).expanduser().resolve()
+        if not resolved_workdir.is_dir():
+            return {"error": f"workdir does not exist or is not a directory: {workdir}"}
+        if not _inside_allowed_root(resolved_workdir, allowed_roots):
+            return {"error": "workdir is outside the configured allowed delegation roots"}
+    else:
+        safe_session = re.sub(r"[^A-Za-z0-9._-]+", "-", session_id).strip("-.")[:96] or "session"
+        resolved_workdir = scratch_root / safe_session
+        try:
+            resolved_workdir.mkdir(parents=True, exist_ok=True, mode=0o700)
+            if not (resolved_workdir / ".git").exists():
+                initialized = subprocess.run(
+                    ["git", "init", "-q", str(resolved_workdir)],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                if initialized.returncode != 0:
+                    return {"error": "could not initialize isolated delegation workdir"}
+        except (OSError, subprocess.SubprocessError):
+            return {"error": "could not prepare isolated delegation workdir"}
+    workdir = str(resolved_workdir)
 
     if platform == "opencode":
-        return _run_opencode(prompt, session_id, workdir, platform_info)
+        result = _run_opencode(prompt, session_id, workdir, platform_info)
     elif platform == "codex":
-        return _run_codex(prompt, session_id, workdir, platform_info)
+        result = _run_codex(prompt, session_id, workdir, platform_info)
     elif platform == "gemini":
-        return _run_gemini_cli(prompt, session_id, workdir, platform_info)
+        result = _run_gemini_cli(prompt, session_id, workdir, platform_info)
     elif platform == "numasec":
-        return _run_numasec(prompt, session_id, workdir, platform_info)
+        result = _run_numasec(prompt, session_id, workdir, platform_info)
     elif platform == "hermes-api":
-        return _run_hermes_api(prompt, session_id, platform_info)
-    return {"error": f"No executor for platform: {platform}"}
+        result = _run_hermes_api(prompt, session_id, platform_info)
+    else:
+        return {"error": f"No executor for platform: {platform}"}
+    result.setdefault("session_id", session_id)
+    result.setdefault("active_platform", platform)
+    if "error" not in result:
+        _record_delegation(result)
+    return result
 
 
 def _tmux_exec(session_name: str, window_name: str, cmd: str, log_path: str) -> Dict[str, Any]:
     """Run a command in a tmux window and return session info."""
     window = f"del-{window_name}"
+    status_path = f"{log_path}.status"
+    try:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+        for artifact in (log_path, status_path):
+            fd = os.open(artifact, flags, 0o600)
+            try:
+                os.fchmod(fd, 0o600)
+            finally:
+                os.close(fd)
+    except OSError:
+        return {"error": "could not prepare delegation status files"}
     # Kill prior window with same name
     subprocess.run(["tmux", "kill-window", "-t", f"delegate:{window}"], capture_output=True)
     # Create tmux session if needed
-    subprocess.run(["tmux", "has-session", "-t", "delegate"], capture_output=True)
     if subprocess.run(["tmux", "has-session", "-t", "delegate"], capture_output=True).returncode != 0:
-        subprocess.run(["tmux", "new-session", "-d", "-s", "delegate", "-n", "_init"], check=False)
+        created = subprocess.run(
+            ["tmux", "new-session", "-d", "-s", "delegate", "-n", "_init"],
+            capture_output=True,
+        )
+        if created.returncode != 0:
+            return {"error": "could not create delegation tmux session"}
     # Spawn in new window
     import shlex
-    full_cmd = f"cd {shlex.quote(session_name)} 2>/dev/null; {cmd} 2>&1 | tee {shlex.quote(log_path)}; echo '[delegate] session ended'"
-    subprocess.run(["tmux", "new-window", "-d", "-t", "delegate", "-n", window, "bash", "-c", full_cmd], capture_output=True)
-    return {"session_id": session_name, "tmux_window": window, "log_path": log_path}
+    full_cmd = (
+        "set -o pipefail; "
+        f"cd {shlex.quote(session_name)} 2>/dev/null || "
+        f"{{ printf '125\\n' > {shlex.quote(status_path)}; exit 125; }}; "
+        f"{cmd} 2>&1 | tee {shlex.quote(log_path)}; "
+        "rc=${PIPESTATUS[0]}; "
+        f"printf '%s\\n' \"$rc\" > {shlex.quote(status_path)}; "
+        "exit \"$rc\""
+    )
+    launched = subprocess.run(
+        ["tmux", "new-window", "-d", "-t", "delegate", "-n", window, "bash", "-c", full_cmd],
+        capture_output=True,
+    )
+    if launched.returncode != 0:
+        return {"error": "could not launch delegation tmux window"}
+    return {
+        "session_id": session_name,
+        "tmux_window": window,
+        "log_path": log_path,
+        "status_path": status_path,
+    }
+
+
+def _opencode_permission_policy() -> Dict[str, Any]:
+    # The OpenCode process needs provider network access, but delegated tools
+    # must not get a shell or arbitrary egress beside the mounted auth state.
+    # external_directory blocks read/edit/glob/grep against the auth overlay.
+    return {
+        "*": "deny",
+        "read": "allow",
+        "edit": "allow",
+        "glob": "allow",
+        "grep": "allow",
+        "bash": "deny",
+        "external_directory": "deny",
+        "question": "deny",
+        "task": "deny",
+        "webfetch": "deny",
+        "websearch": "deny",
+    }
 
 
 def _run_opencode(prompt: str, session_id: str, workdir: str, info: Dict[str, Any]) -> Dict[str, Any]:
@@ -496,9 +924,145 @@ def _run_opencode(prompt: str, session_id: str, workdir: str, info: Dict[str, An
     if not Path(binary).exists():
         return {"error": f"opencode not found at {binary}"}
     import shlex
-    log_path = f"/tmp/delegate-opencode-{session_id}.log"
-    cmd = f"echo {shlex.quote(prompt)} | {binary} run -y 2>&1"
-    return _tmux_exec(workdir, f"oc-{session_id}", cmd, log_path)
+    prepared = _prepare_delegation_run_files("opencode", session_id)
+    log_path = prepared["log_path"]
+    model = os.getenv("SORA_OPENCODE_MODEL", "opencode/mimo-v2.5-free")
+    bwrap = os.getenv("SORA_DELEGATION_BWRAP", "/usr/bin/bwrap")
+    if not Path(bwrap).is_file():
+        return {"error": "bubblewrap is required for sandboxed OpenCode delegation"}
+    try:
+        opencode_data, ephemeral_state = _prepare_opencode_state(session_id)
+    except OSError as exc:
+        return {"error": str(exc)}
+    del opencode_data
+    real_binary = str(Path(binary).resolve())
+    permission = json.dumps(_opencode_permission_policy(), separators=(",", ":"))
+    etc_binds = []
+    for source in (
+        "/etc/resolv.conf",
+        "/etc/hosts",
+        "/etc/nsswitch.conf",
+        "/etc/gai.conf",
+        "/etc/localtime",
+        "/etc/ssl/certs",
+    ):
+        if Path(source).exists():
+            etc_binds.extend(("--ro-bind", source, source))
+    args = [
+        bwrap,
+        "--die-with-parent",
+        "--new-session",
+        "--unshare-all",
+        "--share-net",
+        "--clearenv",
+        "--ro-bind",
+        "/usr",
+        "/usr",
+        "--symlink",
+        "usr/bin",
+        "/bin",
+        "--symlink",
+        "usr/lib",
+        "/lib",
+        "--symlink",
+        "usr/lib64",
+        "/lib64",
+        "--symlink",
+        "usr/sbin",
+        "/sbin",
+        "--dir",
+        "/etc",
+        "--dir",
+        "/etc/ssl",
+        *etc_binds,
+        "--dir",
+        "/opt",
+        "--dir",
+        "/opt/opencode",
+        "--ro-bind",
+        real_binary,
+        "/opt/opencode/opencode",
+        "--dir",
+        "/home",
+        "--dir",
+        "/home/sora",
+        "--dir",
+        "/home/sora/.config",
+        "--dir",
+        "/home/sora/.local",
+        "--dir",
+        "/home/sora/.local/share",
+        "--tmpfs",
+        "/tmp",
+        "--dir",
+        "/workspace",
+        "--bind",
+        workdir,
+        "/workspace",
+        "--bind",
+        str(ephemeral_state),
+        "/home/sora/.local/share/opencode",
+        "--dev",
+        "/dev",
+        "--proc",
+        "/proc",
+        "--setenv",
+        "HOME",
+        "/home/sora",
+        "--setenv",
+        "USER",
+        "sora",
+        "--setenv",
+        "LOGNAME",
+        "sora",
+        "--setenv",
+        "PATH",
+        "/usr/local/bin:/usr/bin:/bin",
+        "--setenv",
+        "XDG_CONFIG_HOME",
+        "/home/sora/.config",
+        "--setenv",
+        "XDG_DATA_HOME",
+        "/home/sora/.local/share",
+        "--setenv",
+        "XDG_CACHE_HOME",
+        "/tmp/cache",
+        "--setenv",
+        "OPENCODE_PERMISSION",
+        permission,
+        "--setenv",
+        "OPENCODE_DISABLE_AUTOUPDATE",
+        "true",
+        "--setenv",
+        "OPENCODE_DISABLE_DEFAULT_PLUGINS",
+        "true",
+        "--chdir",
+        "/workspace",
+        "--",
+        "/opt/opencode/opencode",
+        "run",
+        "--pure",
+        "--model",
+        model,
+        "--",
+        prompt,
+    ]
+    sandbox_cmd = " ".join(shlex.quote(str(arg)) for arg in args)
+    cleanup_script = "import shutil,sys; shutil.rmtree(sys.argv[1], ignore_errors=True)"
+    cleanup_command = (
+        f"/usr/bin/python3 -c {shlex.quote(cleanup_script)} "
+        f"{shlex.quote(str(ephemeral_state))}"
+    )
+    compound = f"cleanup() {{ {cleanup_command}; }}; trap cleanup EXIT; {sandbox_cmd}"
+    cmd = f"/bin/bash -c {shlex.quote(compound)}"
+    result = _tmux_exec(workdir, f"oc-{session_id}", cmd, log_path)
+    result.update(prepared)
+    result["ephemeral_state_path"] = str(ephemeral_state)
+    if "error" in result:
+        _cleanup_ephemeral_state(result)
+    result["session_id"] = session_id
+    result["model"] = model
+    return result
 
 
 def _run_codex(prompt: str, session_id: str, workdir: str, info: Dict[str, Any]) -> Dict[str, Any]:
@@ -506,10 +1070,16 @@ def _run_codex(prompt: str, session_id: str, workdir: str, info: Dict[str, Any])
     if not Path(binary).exists():
         return {"error": f"codex not found at {binary}"}
     import shlex
-    log_path = f"/tmp/delegate-codex-{session_id}.log"
-    # Codex exec: pass prompt via stdin echo
-    cmd = f"echo {shlex.quote(prompt)} | {binary} exec --full-auto --yolo 2>&1"
-    return _tmux_exec(workdir, f"cd-{session_id}", cmd, log_path)
+    prepared = _prepare_delegation_run_files("codex", session_id)
+    log_path = prepared["log_path"]
+    cmd = (
+        f"{shlex.quote(binary)} exec --sandbox workspace-write --ephemeral "
+        f"-C {shlex.quote(workdir)} -- {shlex.quote(prompt)}"
+    )
+    result = _tmux_exec(workdir, f"cd-{session_id}", cmd, log_path)
+    result.update(prepared)
+    result["session_id"] = session_id
+    return result
 
 
 def _run_gemini_cli(prompt: str, session_id: str, workdir: str, info: Dict[str, Any]) -> Dict[str, Any]:

@@ -34,6 +34,43 @@ except Exception:
     voice_recv = None
 
 
+def _append_google_search_tool(setup_payload: Dict[str, Any], enabled: Optional[bool] = None) -> None:
+    """Register Gemini's native grounding tool without duplicating declarations."""
+    if enabled is None:
+        enabled = os.getenv("SORA_NATIVE_GOOGLE_SEARCH", "0").strip().lower() in {
+            "1", "true", "yes", "on",
+        }
+    if not enabled:
+        return
+    tools = setup_payload.setdefault("tools", [])
+    native_search = {"googleSearch": {}}
+    if native_search not in tools:
+        tools.append(native_search)
+
+
+def _bounded_env_int(name: str, default: int, minimum: int, maximum: int) -> int:
+    try:
+        value = int(os.getenv(name, str(default)).strip())
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, min(maximum, value))
+
+
+def _build_realtime_input_config() -> Dict[str, Any]:
+    """Quality-safe conversational endpointing for native audio input."""
+    return {
+        "activityHandling": "START_OF_ACTIVITY_INTERRUPTS",
+        "turnCoverage": "TURN_INCLUDES_ONLY_ACTIVITY",
+        "automaticActivityDetection": {
+            "disabled": False,
+            "startOfSpeechSensitivity": "START_SENSITIVITY_LOW",
+            "endOfSpeechSensitivity": "END_SENSITIVITY_LOW",
+            "prefixPaddingMs": _bounded_env_int("SORA_LIVE_VAD_PREFIX_MS", 80, 20, 200),
+            "silenceDurationMs": _bounded_env_int("SORA_LIVE_VAD_SILENCE_MS", 1100, 800, 1500),
+        },
+    }
+
+
 if voice_recv is not None:
     class GeminiPCMSink(voice_recv.AudioSink):
         """Receive decoded Discord PCM and forward 16 kHz mono chunks to Gemini."""
@@ -196,6 +233,7 @@ class GeminiLiveBridge:
         self._last_video_sent_at: Optional[float] = None
         self._output_turn_open = False
         self._seen_server_content_shapes: set = set()
+        self._transcript_buffers: Dict[str, str] = {"input": "", "output": ""}
         self._notes_file = self._create_notes_file()
         self.metrics: Dict[str, Any] = {
             "audio_in_chunks": 0,
@@ -222,6 +260,12 @@ class GeminiLiveBridge:
             "last_output_monotonic": None,
             "model": None,
         }
+
+    def set_output_echo_guard(self, enabled: bool) -> None:
+        """Enable acoustic residual filtering only for speakerphone output."""
+        self._output_echo_guard = bool(enabled)
+        if not self._output_echo_guard:
+            self._output_echo_guard_pending.clear()
 
     def _emit_event(self, kind: str, **payload: Any) -> None:
         """Emit a transport-neutral session event without affecting Discord."""
@@ -494,17 +538,7 @@ class GeminiLiveBridge:
                 # already controlled at the bridge level (1 fps cap + 512 KB
                 # max + audio-gating).
             },
-            "realtimeInputConfig": {
-                "activityHandling": "START_OF_ACTIVITY_INTERRUPTS",
-                "turnCoverage": "TURN_INCLUDES_ONLY_ACTIVITY",
-                "automaticActivityDetection": {
-                    "disabled": False,
-                    "startOfSpeechSensitivity": "START_SENSITIVITY_LOW",
-                    "endOfSpeechSensitivity": "END_SENSITIVITY_LOW",
-                    "prefixPaddingMs": 0,
-                    "silenceDurationMs": 40,
-                }
-            },
+            "realtimeInputConfig": _build_realtime_input_config(),
             # NOTE: top-level `voice_activity_detection` is intentionally
             # OMITTED. The current Gemini Live API schema
             # (https://ai.google.dev/api/live, v1beta) only exposes
@@ -580,6 +614,7 @@ class GeminiLiveBridge:
             if _gh:
                 setup_payload["tools"].append({"functionDeclarations": _gh})
                 logger.info("GitHub voice tools registered (count=%d)", len(_gh))
+        _append_google_search_tool(setup_payload)
         if handle is not None:
             setup_payload["sessionResumption"] = {"handle": handle}
             logger.info("Session resumption: handle=%s", handle)
@@ -690,9 +725,10 @@ class GeminiLiveBridge:
             try:
                 chunk = self._send_q.get_nowait()
             except queue.Empty:
-                # No audio waiting — send a pending video frame and idle-end check
+                # A quiet gap is normal conversational audio. Do not send
+                # audioStreamEnd here: Gemini can emit output while the mic is
+                # quiet, and finalizing the stream mid-output truncates turns.
                 await self._send_pending_video_frame()
-                await self._maybe_end_idle_audio_stream()
                 await asyncio.sleep(0.02)
                 continue
             if chunk is None:
@@ -728,16 +764,19 @@ class GeminiLiveBridge:
             logger.error("Send video frame error: %s", e)
 
     async def _maybe_end_idle_audio_stream(self) -> None:
+        """Compatibility no-op: silence must not finalize a live mic stream."""
+        return
+
+    async def end_audio_stream(self) -> None:
+        """Explicitly finalize input when the client mutes or ends capture."""
         if not self._audio_stream_open or self._last_audio_sent_at is None or not self._ws:
-            return
-        if time.monotonic() - self._last_audio_sent_at < self.AUDIO_STREAM_IDLE_END_SECONDS:
             return
         try:
             await self._ws.send(json.dumps({"realtimeInput": {"audioStreamEnd": True}}))
             self.metrics["audio_stream_end_events"] += 1
             self._audio_stream_open = False
             self._last_audio_sent_at = None
-            logger.info("Gemini Live: sent audioStreamEnd after idle input")
+            logger.info("Gemini Live: sent explicit audioStreamEnd")
         except Exception as e:
             logger.error("Send audioStreamEnd error: %s", e)
 
@@ -818,6 +857,7 @@ class GeminiLiveBridge:
                     if self._output_turn_open and OUTPUT_TAIL_PAD_MS > 0:
                         self._output_source.feed(_silence_pcm(GEMINI_OUT_SR, GEMINI_OUT_CH, OUTPUT_TAIL_PAD_MS))
                     self._output_turn_open = False
+                    self._finalize_transcripts()
                     self._emit_event("turn.completed")
             # ── Handle tool calls from Gemini ──────────────────────────────────────
             tool_call = msg.get("toolCall")
@@ -841,18 +881,42 @@ class GeminiLiveBridge:
     def _record_transcript(self, direction: str, payload: Any) -> None:
         if not isinstance(payload, dict):
             return
-        text = str(payload.get("text") or "").strip()
+        raw_text = str(payload.get("text") or "")
+        if not raw_text:
+            return
+        self._transcript_buffers[direction] = self._transcript_buffers.get(direction, "") + raw_text
+        text = self._transcript_buffers[direction].strip()
         if not text:
             return
+        is_final = bool(payload.get("finished") or payload.get("final"))
         self._emit_event(
             "transcript.user" if direction == "input" else "transcript.sora",
             text=text,
-            final=bool(payload.get("finished") or payload.get("final")),
+            final=is_final,
         )
         metric_prefix = f"{direction}_transcript"
         self.metrics[f"{metric_prefix}_events"] += 1
         self.metrics[f"last_{metric_prefix}"] = text[-500:]
-        logger.info("Gemini %s transcript: %s", direction, text)
+        logger.debug("Gemini %s transcript partial: %s", direction, text)
+        if is_final:
+            self._commit_final_transcript(direction, text)
+            self._transcript_buffers[direction] = ""
+
+    def _finalize_transcripts(self) -> None:
+        for direction in ("input", "output"):
+            text = self._transcript_buffers.get(direction, "").strip()
+            if not text:
+                continue
+            self._emit_event(
+                "transcript.user" if direction == "input" else "transcript.sora",
+                text=text,
+                final=True,
+            )
+            self._commit_final_transcript(direction, text)
+            self._transcript_buffers[direction] = ""
+
+    def _commit_final_transcript(self, direction: str, text: str) -> None:
+        logger.info("Gemini %s transcript final: %s", direction, text)
         self._append_note_event(direction, text)
         # Webhook: push transcript line to voice.transcript webhooks
         try:
@@ -890,22 +954,16 @@ class GeminiLiveBridge:
         if not function_calls:
             logger.warning("toolCall message without functionCalls: %s", tool_call)
             return
-        # ── Typing feedback: begin audio indicator ──────────────────────────
-        typing_active = False
-        typing_task: Optional[asyncio.Task] = None
+        # One short progress cue is enough. Repeating a 100–650 ms sample every
+        # 50–200 ms fills the same playback queue used by speech and sounds
+        # chopped/mutilated on mobile.
         if TYPING_SOUND_ENABLED and self._output_source is not None and not self._output_turn_open:
-            typing_active = True
-
-            async def _typing_loop():
-                while typing_active:
-                    try:
-                        pcm = generate_typing_pcm()
+            try:
+                pcm = generate_typing_pcm()
+                if pcm:
                         self._output_source.feed(pcm)
-                    except Exception:
-                        break
-                    await asyncio.sleep(0.05 + random.random() * 0.15)
-
-            typing_task = asyncio.get_running_loop().create_task(_typing_loop())
+            except Exception:
+                logger.debug("VoiceLive: progress cue failed", exc_info=True)
 
         responses: List[Dict[str, Any]] = []
         try:
@@ -973,15 +1031,7 @@ class GeminiLiveBridge:
                     "response": result,
                 })
         finally:
-            # ── Typing feedback: end audio indicator ───────────────────────
-            if typing_active:
-                typing_active = False
-            if typing_task:
-                typing_task.cancel()
-                try:
-                    await typing_task
-                except asyncio.CancelledError:
-                    pass
+            pass
         if responses and self._ws:
             payload = {"toolResponse": {"functionResponses": responses}}
             try:

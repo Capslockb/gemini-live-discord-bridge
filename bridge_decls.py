@@ -531,11 +531,55 @@ _LOCAL_FUNCTION_DECLARATIONS = [
     },
     # ── Multi-CLI delegation tools (criterion #23-#25) ─────────────────
     {
+        "name": "local_delegate_quick",
+        "description": (
+            "Immediately execute a reversible coding, repository, build, test, or analysis task "
+            "on Codex, OpenCode, or the healthiest fallback. Use this directly when the user asks "
+            "you to do something; do not stop at a suggestion and do not ask for confirmation unless "
+            "the requested action is destructive, irreversible, publishes externally, or spends money."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "goal": {"type": "string", "description": "Concrete task to execute now"},
+                "platform": {
+                    "type": "string",
+                    "enum": ["auto", "opencode", "codex"],
+                    "description": "Preferred backend; auto chooses a healthy backend",
+                },
+                "workdir": {
+                    "type": "string",
+                    "description": "Existing project directory under SORA_DELEGATION_ALLOWED_ROOTS; omitted uses isolated scratch",
+                },
+            },
+            "required": ["goal"],
+        },
+    },
+    {
+        "name": "local_delegate_status",
+        "description": (
+            "Read back a previously launched delegation. Returns completed with a sanitized output tail, "
+            "running with the active session handle, or failed with a safe reason. Use this instead of "
+            "guessing whether Codex or OpenCode finished."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "sessionId": {"type": "string", "description": "Session ID returned by a delegation tool"},
+                "platform": {
+                    "type": "string",
+                    "enum": ["opencode", "codex"],
+                },
+            },
+            "required": ["sessionId", "platform"],
+        },
+    },
+    {
         "name": "local_delegate_suggest",
         "description": (
             "Analyze a task and suggest the best delegation platform + ETA. "
-            "Call this before delegating a task to determine which CLI to use "
-            "(opencode, codex, gemini, numasec, or hermes-api). "
+            "Call this before delegating a task to choose between the sandboxed "
+            "OpenCode and Codex runners. "
             "Returns platform suggestion, reason, ETA, rate-limits, and context-fit warnings. "
             "The user should confirm the suggestion before proceeding."
         ),
@@ -585,7 +629,7 @@ _LOCAL_FUNCTION_DECLARATIONS = [
                 },
                 "platform": {
                     "type": "string",
-                    "enum": ["opencode", "codex", "gemini", "numasec", "hermes-api"],
+                    "enum": ["opencode", "codex"],
                     "description": "The platform chosen by local_delegate_suggest",
                 },
                 "project_root": {"type": "string", "description": "Optional project root"},
@@ -598,8 +642,7 @@ _LOCAL_FUNCTION_DECLARATIONS = [
         "description": (
             "Execute a delegation on the chosen platform. "
             "Pass the assembled prompt from local_delegate_assemble and the platform "
-            "name. Returns a session_id that can be tracked via opencode_status or "
-            "checked via progress watcher."
+            "name. Returns a session_id that must be checked via local_delegate_status."
         ),
         "parameters": {
             "type": "object",
@@ -607,11 +650,14 @@ _LOCAL_FUNCTION_DECLARATIONS = [
                 "prompt": {"type": "string", "description": "The assembled system prompt from local_delegate_assemble"},
                 "platform": {
                     "type": "string",
-                    "enum": ["opencode", "codex", "gemini", "numasec", "hermes-api"],
-                    "description": "Target platform",
+                    "enum": ["opencode", "codex"],
+                    "description": "Sandboxed target platform",
                 },
                 "session_id": {"type": "string", "description": "A unique session name (lowercase, no spaces)"},
-                "workdir": {"type": "string", "description": "Working directory (default ~/)"},
+                "workdir": {
+                    "type": "string",
+                    "description": "Existing project directory under SORA_DELEGATION_ALLOWED_ROOTS; omitted uses isolated scratch",
+                },
             },
             "required": ["prompt", "platform", "session_id"],
         },
@@ -654,7 +700,7 @@ _LOCAL_FUNCTION_DECLARATIONS = [
                 },
                 "platform": {
                     "type": "string",
-                    "enum": ["opencode", "codex", "gemini", "numasec", "hermes-api"],
+                    "enum": ["opencode", "codex"],
                     "description": "Required for action='clear' (omit to clear all) and action='mark'",
                 },
                 "reason": {

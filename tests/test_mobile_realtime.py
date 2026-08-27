@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import asyncio
 import base64
+import json
 import unittest
+from unittest import mock
 
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
-from mobile_realtime import create_mobile_realtime_app
+from mobile_realtime import MobileAudioOutput, OutboundMux, _receive_loop, create_mobile_realtime_app
 
 
 class FakeBridge:
@@ -19,6 +22,7 @@ class FakeBridge:
         self.context_id = kwargs["context_id"]
         self.profile = kwargs["user_profile"]
         self.output_echo_guard = bool(kwargs.get("output_echo_guard"))
+        self.echo_updates: list[bool] = []
         self.audio: list[bytes] = []
         self.text: list[str] = []
         self.video: list[tuple[bytes, str]] = []
@@ -33,6 +37,10 @@ class FakeBridge:
     async def disconnect(self) -> None:
         self.disconnected = True
 
+    def set_output_echo_guard(self, enabled: bool) -> None:
+        self.output_echo_guard = enabled
+        self.echo_updates.append(enabled)
+
     def feed_audio(self, value: bytes) -> None:
         self.audio.append(value)
 
@@ -46,6 +54,13 @@ class FakeBridge:
 class TestMobileRealtimeTransport(unittest.TestCase):
     def setUp(self) -> None:
         FakeBridge.instances.clear()
+        self.server_gemini_key = "server-gemini-test-key"
+        self.gemini_key_patch = mock.patch(
+            "mobile_realtime.GEMINI_API_KEY",
+            self.server_gemini_key,
+            create=True,
+        )
+        self.gemini_key_patch.start()
         self.app = create_mobile_realtime_app(
             internal_token="internal-test-token",
             bridge_factory=FakeBridge,
@@ -54,6 +69,7 @@ class TestMobileRealtimeTransport(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.client.close()
+        self.gemini_key_patch.stop()
 
     def test_websocket_requires_internal_auth(self):
         with self.assertRaises(WebSocketDisconnect) as caught:
@@ -68,7 +84,6 @@ class TestMobileRealtimeTransport(unittest.TestCase):
                 {
                     "type": "session.start",
                     "contextId": "ctx-mobile-1",
-                    "providerKey": "p" * 32,
                     "allowedTools": ["web_search", "not_permitted"],
                     "peerName": "user",
                 }
@@ -96,13 +111,41 @@ class TestMobileRealtimeTransport(unittest.TestCase):
 
         bridge = FakeBridge.instances[-1]
         self.assertEqual(bridge.context_id, "ctx-mobile-1")
+        self.assertEqual(bridge.api_key, self.server_gemini_key)
         self.assertEqual(bridge.audio, [pcm_in])
         self.assertEqual(bridge.text, ["hello"])
         self.assertEqual(bridge.video, [(frame, "image/jpeg")])
         self.assertTrue(bridge.profile.is_tool_allowed("web_search"))
         self.assertFalse(bridge.profile.is_tool_allowed("not_permitted"))
-        self.assertTrue(bridge.output_echo_guard)
+        self.assertFalse(bridge.output_echo_guard)
         self.assertTrue(bridge.disconnected)
+
+    def test_audio_route_controls_echo_guard(self):
+        class ScriptedSocket:
+            def __init__(self):
+                self.messages = [
+                    {"type": "websocket.receive", "text": json.dumps({"type": "audio.route", "speakerphone": True})},
+                    {"type": "websocket.receive", "text": json.dumps({"type": "audio.route", "speakerphone": False})},
+                    {"type": "websocket.disconnect"},
+                ]
+
+            async def receive(self):
+                return self.messages.pop(0)
+
+        bridge = FakeBridge(
+            output_source=MobileAudioOutput(OutboundMux()),
+            on_event=lambda event: None,
+            api_key="p" * 32,
+            context_id="ctx-route",
+            user_profile=None,
+            output_echo_guard=False,
+        )
+        output = MobileAudioOutput(OutboundMux())
+
+        asyncio.run(_receive_loop(ScriptedSocket(), bridge, output))
+
+        self.assertEqual(bridge.echo_updates, [True, False])
+        self.assertFalse(bridge.output_echo_guard)
 
     def test_canonical_playback_interrupted_frame_keeps_session_alive(self):
         headers = {"Authorization": "Bearer internal-test-token"}

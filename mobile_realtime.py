@@ -2,9 +2,8 @@
 
 This module does not implement an assistant. It adapts authenticated WebSocket
 frames to ``GeminiLiveBridge`` and projects the bridge's neutral events/audio
-back to the SORA Mobile Gateway. Provider credentials are accepted only in the
-initial internal session frame, retained in memory for that session, and never
-logged.
+back to the SORA Mobile Gateway. Gemini credentials are loaded only from the
+server environment; mobile/internal session frames never carry provider keys.
 """
 
 from __future__ import annotations
@@ -13,6 +12,7 @@ import asyncio
 import base64
 import binascii
 import hmac
+import inspect
 import json
 import logging
 import os
@@ -23,6 +23,7 @@ from typing import Any
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 
+from bridge_config import GEMINI_API_KEY
 from bridge_core import GeminiLiveBridge
 
 logger = logging.getLogger("sora-mobile-realtime")
@@ -33,10 +34,11 @@ _MAX_TEXT_FRAME = 16 * 1024
 
 
 def configure_safe_transport_logging() -> None:
-    """Prevent WebSocket debug logging from serializing private audio frames."""
+    """Prevent transport/tool debug logs from contending with realtime audio."""
 
-    logging.getLogger("websockets.client").setLevel(logging.WARNING)
-    logging.getLogger("websockets.server").setLevel(logging.WARNING)
+    for name in ("websockets.client", "websockets.server", "httpcore", "httpx", "urllib3"):
+        logging.getLogger(name).setLevel(logging.WARNING)
+    logging.getLogger("hermes_cli.plugins").setLevel(logging.INFO)
 
 
 configure_safe_transport_logging()
@@ -134,20 +136,17 @@ def _authorization_token(websocket: WebSocket) -> str | None:
 def _configured_tool_allowlist() -> set[str]:
     raw = os.getenv(
         "SORA_REALTIME_ALLOWED_TOOLS",
-        "web_search,web_extract,local_delegate_suggest,local_delegate_eta,local_delegate_health",
+        "web_search,web_extract,local_honcho,local_delegate_quick,local_delegate_execute,local_delegate_status,local_delegate_suggest,local_delegate_eta,local_delegate_health",
     )
     return {value.strip() for value in raw.split(",") if value.strip()}
 
 
-def _validate_start(payload: Any) -> tuple[str, str, set[str], str]:
+def _validate_start(payload: Any) -> tuple[str, set[str], str]:
     if not isinstance(payload, dict) or payload.get("type") != "session.start":
         raise SessionProtocolError("The first frame must start a session")
     context_id = payload.get("contextId")
-    provider_key = payload.get("providerKey")
     if not isinstance(context_id, str) or not _CONTEXT_RE.fullmatch(context_id):
         raise SessionProtocolError("Invalid contextId")
-    if not isinstance(provider_key, str) or not 16 <= len(provider_key) <= 256:
-        raise SessionProtocolError("A provisioned provider credential is required")
     requested = payload.get("allowedTools") or []
     if not isinstance(requested, list) or any(not isinstance(item, str) for item in requested):
         raise SessionProtocolError("Invalid allowedTools")
@@ -155,7 +154,7 @@ def _validate_start(payload: Any) -> tuple[str, str, set[str], str]:
     peer_name = payload.get("peerName")
     if not isinstance(peer_name, str) or not peer_name.strip():
         peer_name = "user"
-    return context_id, provider_key, allowed, peer_name[:128]
+    return context_id, allowed, peer_name[:128]
 
 
 async def _send_loop(websocket: WebSocket, outbound: OutboundMux) -> None:
@@ -199,8 +198,20 @@ async def _receive_loop(websocket: WebSocket, bridge: Any, output: MobileAudioOu
         kind = control.get("type")
         if kind == "mic.mute":
             muted = True
+            ender = getattr(bridge, "end_audio_stream", None)
+            if callable(ender):
+                pending = ender()
+                if inspect.isawaitable(pending):
+                    await pending
         elif kind == "mic.unmute":
             muted = False
+        elif kind == "audio.route":
+            speakerphone = control.get("speakerphone")
+            if not isinstance(speakerphone, bool):
+                raise SessionProtocolError("speakerphone must be a boolean")
+            setter = getattr(bridge, "set_output_echo_guard", None)
+            if callable(setter):
+                setter(speakerphone)
         elif kind in {"playback.interrupted", "playback.interrupt"}:
             output.clear()
         elif kind == "text.send":
@@ -219,6 +230,11 @@ async def _receive_loop(websocket: WebSocket, bridge: Any, output: MobileAudioOu
                 raise SessionProtocolError("Camera frame is outside limits")
             bridge.feed_video_frame(frame, "image/jpeg")
         elif kind == "session.end":
+            ender = getattr(bridge, "end_audio_stream", None)
+            if callable(ender):
+                pending = ender()
+                if inspect.isawaitable(pending):
+                    await pending
             return
         else:
             raise SessionProtocolError("Unsupported control frame")
@@ -270,7 +286,7 @@ def create_mobile_realtime_app(
                 start = json.loads(first)
             except json.JSONDecodeError as exc:
                 raise SessionProtocolError("Malformed session frame") from exc
-            context_id, provider_key, allowed_tools, peer_name = _validate_start(start)
+            context_id, allowed_tools, peer_name = _validate_start(start)
 
             def emit_event(event: dict[str, Any]) -> None:
                 outbound.put_nowait("event", event)
@@ -278,15 +294,13 @@ def create_mobile_realtime_app(
             bridge = bridge_factory(
                 output_source=output,
                 on_event=emit_event,
-                api_key=provider_key,
+                api_key=GEMINI_API_KEY,
                 context_id=context_id,
                 user_profile=MobileUserProfile(allowed_tools, peer_name),
-                output_echo_guard=True,
+                output_echo_guard=False,
             )
             if bridge is None:
                 raise RuntimeError("Realtime bridge factory returned no session")
-            # Drop the only sidecar-held reference as soon as the bridge owns it.
-            provider_key = ""
             await bridge.connect()
             await _receive_loop(websocket, bridge, output)
         except (SessionProtocolError, asyncio.TimeoutError) as exc:
