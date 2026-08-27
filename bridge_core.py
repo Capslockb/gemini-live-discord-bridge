@@ -104,6 +104,34 @@ class AudioOutput(Protocol):
     def clear(self) -> None: ...
 
 
+class AudioFramePacer:
+    """Schedule PCM chunks at their real-time duration without burst catch-up."""
+
+    def __init__(self, sample_rate: int, sample_width: int, channels: int) -> None:
+        self._bytes_per_second = sample_rate * sample_width * channels
+        self._next_send_at: Optional[float] = None
+
+    def delay_for(self, chunk: bytes, *, now: Optional[float] = None) -> float:
+        current = time.monotonic() if now is None else now
+        send_at = current if self._next_send_at is None else max(current, self._next_send_at)
+        duration = len(chunk) / self._bytes_per_second
+        self._next_send_at = send_at + duration
+        return send_at - current
+
+
+def drop_audio_backlog(audio_queue: "queue.Queue[Optional[bytes]]", max_frames: int) -> int:
+    """Drop stale queued PCM so the live stream cannot accumulate latency."""
+
+    dropped = 0
+    while audio_queue.qsize() > max_frames:
+        try:
+            audio_queue.get_nowait()
+        except queue.Empty:
+            break
+        dropped += 1
+    return dropped
+
+
 class GeminiLiveBridge:
     AUDIO_STREAM_IDLE_END_SECONDS = float(os.getenv("GEMINI_AUDIO_STREAM_IDLE_END_SECONDS", "0.25"))
 
@@ -153,6 +181,10 @@ class GeminiLiveBridge:
             or GEMINI_VOICE_NAME
         )
         self._send_q: "queue.Queue[Optional[bytes]]" = queue.Queue(maxsize=256)
+        self._audio_pacer = AudioFramePacer(sample_rate=16_000, sample_width=2, channels=1)
+        self._audio_max_backlog_frames = max(
+            1, int(os.getenv("SORA_AUDIO_MAX_BACKLOG_FRAMES", "10"))
+        )
         self._video_q: "queue.Queue[Optional[Dict[str, Any]]]" = queue.Queue(maxsize=2)
         self._tasks: List[asyncio.Task] = []
         self._audio_stream_open = False
@@ -163,6 +195,7 @@ class GeminiLiveBridge:
         self._notes_file = self._create_notes_file()
         self.metrics: Dict[str, Any] = {
             "audio_in_chunks": 0,
+            "audio_in_dropped_chunks": 0,
             "audio_out_chunks": 0,
             "audio_out_bytes": 0,
             "audio_stream_end_events": 0,
@@ -619,7 +652,9 @@ class GeminiLiveBridge:
 
     async def _send_loop(self):
         while self._running:
-            # Drain audio queue aggressively while interleaving video frames
+            dropped = drop_audio_backlog(self._send_q, self._audio_max_backlog_frames)
+            if dropped:
+                self.metrics["audio_in_dropped_chunks"] += dropped
             try:
                 chunk = self._send_q.get_nowait()
             except queue.Empty:
@@ -630,6 +665,9 @@ class GeminiLiveBridge:
                 continue
             if chunk is None:
                 break
+            delay = self._audio_pacer.delay_for(chunk)
+            if delay > 0:
+                await asyncio.sleep(delay)
             # Send one video frame between audio chunks so video doesn't starve
             await self._send_pending_video_frame()
             b64_data = base64.b64encode(chunk).decode()

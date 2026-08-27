@@ -32,6 +32,16 @@ _MAX_VIDEO_FRAME = 512 * 1024
 _MAX_TEXT_FRAME = 16 * 1024
 
 
+def configure_safe_transport_logging() -> None:
+    """Prevent WebSocket debug logging from serializing private audio frames."""
+
+    logging.getLogger("websockets.client").setLevel(logging.WARNING)
+    logging.getLogger("websockets.server").setLevel(logging.WARNING)
+
+
+configure_safe_transport_logging()
+
+
 class MobileUserProfile:
     """Minimal per-session policy consumed by ``GeminiLiveBridge``."""
 
