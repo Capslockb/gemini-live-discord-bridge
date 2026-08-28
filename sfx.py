@@ -22,6 +22,7 @@ import logging
 import os
 import threading
 import wave
+import weakref
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -100,6 +101,25 @@ _TARGET_CH = 1
 _TARGET_SW = 2  # 16-bit
 
 
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+_MAX_DURATION_SECONDS = _env_float("DISCORD_VOICE_LIVE_SFX_MAX_SECONDS", 0.65)
+_MAX_PEAK = _env_float("DISCORD_VOICE_LIVE_SFX_MAX_PEAK", 0.35)
+_FADE_MS = max(0, _env_int("DISCORD_VOICE_LIVE_SFX_FADE_MS", 12))
+
+
 def _resample_to_target(frames: bytes, src_sr: int, src_ch: int, src_sw: int) -> bytes:
     """Resample WAV frames (any sr/ch/sample_width) to 24kHz mono PCM16.
 
@@ -152,6 +172,25 @@ def load_slot_pcm(slot: str) -> Optional[bytes]:
             import numpy as np
             raw = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) * vol
             pcm = np.clip(raw, -32768, 32767).astype(np.int16).tobytes()
+        # UI cues share the speech transport. Bound them so a loud/long WAV
+        # cannot mask the assistant, fill the jitter buffer, or clip on phone
+        # speakers. Fade the cropped edge rather than ending mid-wave.
+        import numpy as np
+        raw = np.frombuffer(pcm, dtype=np.int16).astype(np.float32)
+        max_samples = max(1, int(_TARGET_SR * _MAX_DURATION_SECONDS))
+        raw = raw[:max_samples].copy()
+        if raw.size:
+            raw -= float(raw.mean())
+            peak = float(np.max(np.abs(raw)))
+            peak_limit = max(0.0, min(1.0, _MAX_PEAK)) * 32767.0
+            if peak > peak_limit > 0:
+                raw *= peak_limit / peak
+            fade_samples = min(int(_TARGET_SR * _FADE_MS / 1000), raw.size // 2)
+            if fade_samples > 1:
+                fade = np.linspace(0.0, 1.0, fade_samples, dtype=np.float32)
+                raw[:fade_samples] *= fade
+                raw[-fade_samples:] *= fade[::-1]
+        pcm = np.clip(raw, -32768, 32767).astype(np.int16).tobytes()
         with _PCM_CACHE_LOCK:
             _PCM_CACHE[slot] = pcm
         logger.info("sfx: loaded slot=%s path=%s dur=%.2fs", slot, path, len(pcm) / (_TARGET_SR * _TARGET_SW))
@@ -176,32 +215,43 @@ def invalidate_cache(slot: Optional[str] = None) -> None:
 # owned by a VoiceLiveBridge. Multiple bridges can be active (per-user).
 # We track the most-recently-active source by weakref.
 
-_ACTIVE_SOURCES: Dict[str, Any] = {}  # session_id → (weakref to source, ts)
+_ACTIVE_SOURCES: Dict[str, weakref.ReferenceType[Any]] = {}
 _ACTIVE_LOCK = threading.Lock()
 
 
 def register_active_source(session_id: str, source: Any) -> None:
     """Mark `source` as the active output for `session_id`. Auto-cleans
     when the source is GC'd."""
-    import weakref
+    if source is None:
+        return
+
+    def forget(expired: weakref.ReferenceType[Any]) -> None:
+        _forget(session_id, expired)
+
+    source_ref = weakref.ref(source, forget)
     with _ACTIVE_LOCK:
-        if source is not None:
-            _ACTIVE_SOURCES[session_id] = (weakref.ref(source, lambda ref, sid=session_id: _forget(sid)), source)
+        _ACTIVE_SOURCES[session_id] = source_ref
 
 
-def _forget(session_id: str) -> None:
+def _forget(
+    session_id: str,
+    expired: Optional[weakref.ReferenceType[Any]] = None,
+) -> None:
     with _ACTIVE_LOCK:
-        _ACTIVE_SOURCES.pop(session_id, None)
+        current = _ACTIVE_SOURCES.get(session_id)
+        if expired is None or current is expired:
+            _ACTIVE_SOURCES.pop(session_id, None)
 
 
 def pick_active_source() -> Optional[Any]:
     """Return a live (non-GC'd) source from the registry, or None."""
     with _ACTIVE_LOCK:
-        for sid, (ref, src) in list(_ACTIVE_SOURCES.items()):
-            if ref() is None:
+        for sid, source_ref in list(_ACTIVE_SOURCES.items()):
+            source = source_ref()
+            if source is None:
                 _ACTIVE_SOURCES.pop(sid, None)
                 continue
-            return src
+            return source
         return None
 
 

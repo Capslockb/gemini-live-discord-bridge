@@ -43,12 +43,14 @@ This repo uses raw WebSockets instead of the GenAI SDK so the bridge can stay cl
 - `generationConfig.speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName`: default voice is `Kore`.
 - `realtimeInputConfig.activityHandling`: `START_OF_ACTIVITY_INTERRUPTS` for barge-in.
 - `realtimeInputConfig.turnCoverage`: `TURN_INCLUDES_ONLY_ACTIVITY`.
-- `realtimeInputConfig.automaticActivityDetection`: enabled, with low start/end sensitivity, `prefixPaddingMs=0`, and `silenceDurationMs=40`.
+- `realtimeInputConfig.automaticActivityDetection`: enabled, with low start/end sensitivity, `prefixPaddingMs=80`, and conversational `silenceDurationMs=1100` so natural pauses do not split or clip a sentence. The local output-clear path still handles fast barge-in.
 - `inputAudioTranscription` and `outputAudioTranscription`: enabled.
 - `systemInstruction`: base system prompt plus optional Honcho context and per-user overrides.
 - `tools`: Live API function declarations grouped by feature area and filtered by per-user allowlist when available.
 
 `mediaResolution` is intentionally omitted. Code comments note that the current model lineup rejects the field even though the broader API reference lists it in the general generation config shape.
+
+Mobile Realtime sessions are authenticated by the private internal bearer and use the server-owned `GEMINI_API_KEY`. Their `session.start` frame carries only context, tool allowlist, and peer metadata; client provider credentials are neither required nor accepted.
 
 Top-level `voice_activity_detection` is also intentionally omitted. VAD tuning lives under `realtimeInputConfig.automaticActivityDetection`.
 

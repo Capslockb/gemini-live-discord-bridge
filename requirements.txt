@@ -2,3 +2,8 @@ discord-ext-voice-recv==0.5.2a179
 numpy==2.4.3
 websockets==15.0.1
 davey==0.1.5
+fastapi==0.116.1
+starlette==0.47.3
+uvicorn[standard]==0.35.0
+requests==2.33.0
+honcho-ai==2.2.0

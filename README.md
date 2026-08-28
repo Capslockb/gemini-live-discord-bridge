@@ -156,6 +156,23 @@ DISCORD_VOICE_LIVE_SECRET_FILE=~/.hermes/voice-live-control-secret
 
 ---
 
+## Transport-neutral mobile realtime adapter
+
+`mobile_realtime.py` exposes the existing `GeminiLiveBridge` session core to a separate, loopback-only WebSocket transport for the SORA Mobile Gateway. It does not expose Discord interfaces and does not implement a second assistant. Existing Discord behavior remains in the Discord adapter.
+
+The adapter accepts authenticated gateway traffic at `WS /v1/realtime`, preserves `contextId`, emits neutral lifecycle/transcript/tool/interruption events, accepts 16 kHz mono PCM input, and returns the bridge's established 24 kHz mono PCM output. The adapter uses the server-owned `GEMINI_API_KEY`; client session frames do not carry provider credentials. The key stays in process memory for the session and is passed to Google in the `x-goog-api-key` header rather than the URL.
+
+Run only on loopback or an equivalent private service network:
+
+```bash
+export SORA_REALTIME_INTERNAL_TOKEN='[REDACTED]'
+uvicorn mobile_realtime:app --host 127.0.0.1 --port 9930 --no-access-log
+```
+
+The Android/Tailscale-facing endpoint is the separately authenticated SORA Mobile Gateway, never this internal adapter directly.
+
+---
+
 ## Documentation map
 
 Current Markdown docs:

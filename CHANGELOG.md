@@ -1,5 +1,15 @@
 # CHANGELOG — gemini-live-discord-bridge
 
+## Unreleased
+
+- Added the authenticated mobile Realtime transport with server-owned Gemini credentials; client `providerKey` handshakes are no longer required or accepted.
+- Added direct web, Honcho, and delegation tools, including exit-code-backed `local_delegate_status`, collision-resistant session IDs, allowed workdir roots, isolated scratch workdirs, least-privilege bubblewrapped OpenCode, private randomized run artifacts, and Codex `workspace-write` execution.
+- Preserved natural speech with 1100 ms conversational VAD and assembled transcript deltas before presentation.
+- Restricted the output echo guard to explicit speakerphone route events, bounded/faded SFX playback with safe malformed-env fallbacks, and suppressed noisy transport logs.
+- Restricted Live execution and fallback to sandboxed OpenCode/Codex backends; marker-first fallback now proves a nonzero exit and that the original worker stopped before launching a replacement.
+- Restricted OpenCode delegates to workspace read/edit tools only; shell, arbitrary web egress, subagents, and external paths are denied while provider auth stays in an ephemeral isolated mount.
+- Validated and IP-pinned basic web-extraction requests so loopback, private, link-local, reserved, mixed-DNS, and redirect-to-internal targets fail closed.
+
 ## 0.3.5 — 2026-06-09 (VOPI functional release)
 
 **First public release candidate.** The bridge is operational and shipping as the **VOPI build** — "functional, although it has rough edges." Stable enough for self-hosters; not yet feature-complete.

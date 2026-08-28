@@ -9,7 +9,7 @@ For protocol details, see [`gemini-live-implementation.md`](gemini-live-implemen
 | Var | Default | Description |
 |---|---|---|
 | `DISCORD_BOT_TOKEN` | — | Discord bot token. Required by the Hermes Discord adapter / installer path. |
-| `GEMINI_API_KEY` | — | Gemini API key. Required unless `GOOGLE_API_KEY` is set. |
+| `GEMINI_API_KEY` | — | Server-owned Gemini API key. Required unless `GOOGLE_API_KEY` is set; mobile clients never provide this value. |
 | `GOOGLE_API_KEY` | — | Fallback Gemini API key used when `GEMINI_API_KEY` is empty. |
 | `DISCORD_VOICE_LIVE_USER_ID` | repository-embedded deployment fallback | Strongly recommended on current `main`. Used for slash-command channel inference, target-user presence checks, and default Honcho peer naming. The embedded fallback is unsafe for reused or multi-user deployments. Runtime, installer, and identity-routing remediation is tracked in [Issue #16](https://github.com/Capslockb/gemini-live-discord-bridge/issues/16). Explicit guild/channel tool calls can avoid channel inference, but runtime remediation has not landed. |
 
@@ -21,6 +21,21 @@ For protocol details, see [`gemini-live-implementation.md`](gemini-live-implemen
 | `GEMINI_LIVE_MODEL_FALLBACKS` | `gemini-3.1-flash-live-preview,gemini-2.5-flash-native-audio-preview-12-2025,gemini-2.5-flash-native-audio-preview-09-2025` | Comma-separated fallback candidates. The code deduplicates candidates and tries them in order. |
 | `DISCORD_VOICE_LIVE_VOICE` | `Kore` | Gemini prebuilt voice name used in `speechConfig.voiceConfig.prebuiltVoiceConfig`. |
 | `DISCORD_VOICE_LIVE_GREETING` | `I'm here.` | Optional text injected after Gemini connects. Set empty if you want a silent connection after first-turn mute. |
+| `SORA_NATIVE_GOOGLE_SEARCH` | `0` | Opt in to Gemini's native Google Search tool. Keep disabled when model quota rejects native grounding; the explicit `web_search`/`web_extract` tools remain available. |
+
+## Sandboxed Live delegation
+
+| Variable | Default | Purpose |
+|---|---:|---|
+| `SORA_DELEGATION_ALLOWED_ROOTS` | empty | `:`-separated existing project roots that Live may use as explicit workdirs. The isolated scratch root is always allowed. |
+| `SORA_DELEGATION_SCRATCH_ROOT` | `/tmp/sora-live-delegations` | Per-session Git workspaces used when no workdir is supplied. |
+| `SORA_DELEGATION_STATE_ROOT` | `/tmp/sora-live-delegation-state` | Mode-`0700` ephemeral OpenCode state overlays. Credentials are copied mode `0600` and the overlay is deleted when the runner exits. |
+| `SORA_DELEGATION_RUN_ROOT` | `/tmp/sora-live-delegation-runs` | Mode-`0700` parent for randomized per-run directories. Logs, completion markers, and lookup metadata are mode `0600`; status never reconstructs a predictable `/tmp` filename. |
+| `SORA_OPENCODE_DATA_DIR` | `~/.local/share/opencode` | Source for OpenCode auth metadata copied into the ephemeral overlay. |
+| `SORA_DELEGATION_BWRAP` | `/usr/bin/bwrap` | Required bubblewrap binary. OpenCode fails closed if it is unavailable. |
+| `SORA_OPENCODE_MODEL` | `opencode/mimo-v2.5-free` | Model selected for sandboxed OpenCode runs. |
+
+Live exposes execution only through OpenCode and Codex. OpenCode receives a minimal bubblewrap filesystem (`/usr`, selected network/TLS files, its executable, ephemeral auth state, and `/workspace`), a cleared environment, and a read/edit-only policy: shell, web fetch/search, tasks, and every external path are denied. The host root and home secrets are not mounted. Codex uses `workspace-write`. Fallback never enters Gemini CLI, Numasec, or Hermes API. Completion and fallback decisions are marker-first: a successful exit-code marker wins over error-looking free-form output. Runtime logs, status markers, and metadata live in randomized `0700` directories with `0600` files.
 
 ## Sidecar control API
 

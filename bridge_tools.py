@@ -3,20 +3,24 @@ import ast
 import asyncio
 import base64
 import html
+import http.client as http_client
+import ipaddress
 import json
 import logging
 import os
 import queue
 import random
 import re
+import secrets
+import socket
+import ssl
 import subprocess
 import sys
 import time
 import wave
 from http import HTTPStatus
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
-from urllib.request import Request, urlopen
+from urllib.parse import parse_qs, urljoin, urlparse
 from typing import Any, Optional, Dict, List, Callable, Tuple
 
 import numpy as np
@@ -24,6 +28,7 @@ logger = logging.getLogger("voice-live")
 from bridge_config import GITHUB_VOICE_TOOLS_ENABLED, GOOGLE_API_BIN, NOTES_DIR, _GH_BIN, _NOTES_PATH
 from bridge_email import _autocorrect_email_address
 from bridge_opencode import _bridge_user_id, _opencode_get_bridge
+import delegation_agent as _local_delegation_agent
 def _get_bridge():
     """Lazy accessor for the global BRIDGE singleton (lives in bridge_http).
 
@@ -457,20 +462,123 @@ def _normalize_voice_web_args(name: str, args: Dict[str, Any]) -> Dict[str, Any]
     return normalized
 
 
-def _basic_extract_url(url: str) -> Dict[str, Any]:
+class _PinnedHTTPSConnection(http_client.HTTPSConnection):
+    """TLS connection pinned to a validated IP while verifying the URL host."""
+
+    def __init__(self, host: str, address: str, port: int, timeout: float) -> None:
+        super().__init__(host, port=port, timeout=timeout)
+        self._origin_host = host
+        self._validated_address = address
+        self._verification_context = ssl.create_default_context()
+
+    def connect(self) -> None:
+        raw_socket = socket.create_connection(
+            (self._validated_address, self.port),
+            self.timeout,
+        )
+        self.sock = self._verification_context.wrap_socket(raw_socket, server_hostname=self._origin_host)
+
+
+def _validate_public_http_url(url: str) -> tuple[Any, list[str]]:
+    if not url or len(url) > 2048 or any(char in url for char in "\r\n\x00"):
+        raise ValueError("Invalid HTTP URL")
     parsed = urlparse(url)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        return {"url": url, "title": "", "content": "", "error": "Invalid HTTP URL"}
-    req = Request(
-        url,
-        headers={
-            "User-Agent": "HermesVoiceLive/1.0 (+https://github.com/NousResearch/hermes-agent)",
-            "Accept": "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.2",
-        },
-    )
-    with urlopen(req, timeout=12) as resp:
-        raw = resp.read(500_000)
-        content_type = resp.headers.get("content-type", "")
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc or not parsed.hostname:
+        raise ValueError("Invalid HTTP URL")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("URL credentials are not allowed")
+    try:
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    except ValueError as exc:
+        raise ValueError("Invalid URL port") from exc
+    if port not in {80, 443}:
+        raise ValueError("Only standard HTTP/HTTPS ports are allowed")
+    try:
+        hostname = parsed.hostname.encode("idna").decode("ascii")
+        answers = socket.getaddrinfo(
+            hostname,
+            port,
+            type=socket.SOCK_STREAM,
+            proto=socket.IPPROTO_TCP,
+        )
+    except (OSError, UnicodeError) as exc:
+        raise ValueError("URL hostname could not be resolved") from exc
+    addresses = sorted({str(answer[4][0]) for answer in answers if answer and len(answer) >= 5})
+    if not addresses:
+        raise ValueError("URL hostname could not be resolved")
+    for address in addresses:
+        try:
+            public = ipaddress.ip_address(address).is_global
+        except ValueError as exc:
+            raise ValueError("URL hostname returned an invalid address") from exc
+        if not public:
+            raise ValueError("URL hostname must resolve only to public addresses")
+    return parsed, addresses
+
+
+def _request_public_http_once(parsed: Any, address: str) -> tuple[int, Dict[str, str], bytes]:
+    hostname = parsed.hostname.encode("idna").decode("ascii")
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    if parsed.scheme == "https":
+        connection: Any = _PinnedHTTPSConnection(hostname, address, port, timeout=12)
+    else:
+        connection = http_client.HTTPConnection(address, port=port, timeout=12)
+    path = parsed.path or "/"
+    if parsed.params:
+        path += ";" + parsed.params
+    if parsed.query:
+        path += "?" + parsed.query
+    host_header = f"[{hostname}]" if ":" in hostname else hostname
+    headers = {
+        "Host": host_header,
+        "User-Agent": "HermesVoiceLive/1.0 (+https://github.com/NousResearch/hermes-agent)",
+        "Accept": "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.2",
+        "Connection": "close",
+    }
+    try:
+        connection.request("GET", path, headers=headers)
+        response = connection.getresponse()
+        body = response.read(500_000)
+        response_headers = {str(key).lower(): str(value) for key, value in response.getheaders()}
+        return int(response.status), response_headers, body
+    finally:
+        connection.close()
+
+
+def _fetch_public_http(url: str, max_redirects: int = 5) -> tuple[bytes, str, str]:
+    current_url = url
+    for redirect_count in range(max_redirects + 1):
+        parsed, addresses = _validate_public_http_url(current_url)
+        last_error: Optional[BaseException] = None
+        response: Optional[tuple[int, Dict[str, str], bytes]] = None
+        for address in addresses:
+            try:
+                response = _request_public_http_once(parsed, address)
+                break
+            except (OSError, http_client.HTTPException) as exc:
+                last_error = exc
+        if response is None:
+            raise OSError("Public URL request failed") from last_error
+        status, headers, raw = response
+        if status in {301, 302, 303, 307, 308}:
+            location = headers.get("location", "").strip()
+            if not location:
+                raise ValueError("Redirect response did not include a location")
+            if redirect_count >= max_redirects:
+                raise ValueError("Too many HTTP redirects")
+            current_url = urljoin(current_url, location)
+            continue
+        if status < 200 or status >= 400:
+            raise OSError(f"HTTP request failed with status {status}")
+        return raw, headers.get("content-type", ""), current_url
+    raise ValueError("Too many HTTP redirects")
+
+
+def _basic_extract_url(url: str) -> Dict[str, Any]:
+    try:
+        raw, content_type, _final_url = _fetch_public_http(url)
+    except ValueError as exc:
+        return {"url": url, "title": "", "content": "", "error": str(exc)}
     charset_match = re.search(r"charset=([\w.-]+)", content_type, re.I)
     encoding = charset_match.group(1) if charset_match else "utf-8"
     text = raw.decode(encoding, errors="replace")
@@ -518,7 +626,17 @@ def _run_web_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         try:
             parsed = json.loads(result)
             if isinstance(parsed, dict) and parsed.get("success") is False:
-                if name == "web_extract" and "No web extract provider configured" in str(parsed.get("error", "")):
+                error_text = str(parsed.get("error", ""))
+                recoverable_extract_error = any(
+                    marker in error_text.lower()
+                    for marker in (
+                        "no web extract provider configured",
+                        "plugin is disabled",
+                        "plugin ('web/",
+                        "extract backend unavailable",
+                    )
+                )
+                if name == "web_extract" and recoverable_extract_error:
                     logger.warning("Web extract provider unavailable; using basic HTTP fallback")
                     return _basic_web_extract(args.get("urls", []))
                 return {"error": parsed.get("error", "web tool failed")}
@@ -1052,8 +1170,13 @@ def _run_local_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
                 return {"error": f"YouTube search failed: {exc}"}
 
         elif name == "local_honcho":
-            query = args.get("query", "")
-            limit = args.get("limit", 5)
+            query = str(args.get("query") or "").strip()[:1000]
+            if not query:
+                query = "current user context, preferences, and relevant unfinished work"
+            try:
+                limit = max(1, min(int(args.get("limit", 3)), 5))
+            except (TypeError, ValueError):
+                limit = 3
             try:
                 import requests
                 honcho_json = Path.home() / ".hermes" / "honcho.json"
@@ -1069,12 +1192,33 @@ def _run_local_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
                     f"{base_url}/v3/workspaces/{workspace}/peers/{peer_name}/search",
                     json={"query": query, "limit": limit},
                     headers={"Authorization": f"Bearer {api_key}"},
-                    timeout=10,
+                    timeout=5,
                 )
                 r.raise_for_status()
                 data = r.json()
-                excerpts = [item.get("content", "") for item in (data or [])]
-                return {"result": {"excerpts": excerpts[:limit]}}
+                items = data if isinstance(data, list) else data.get("items", data.get("results", []))
+                excerpts = []
+                seen = set()
+                total_chars = 0
+                for item in items or []:
+                    if not isinstance(item, dict):
+                        continue
+                    content = " ".join(str(item.get("content") or "").split())
+                    if not content:
+                        continue
+                    content = content[:600]
+                    if content in seen:
+                        continue
+                    remaining = 3000 - total_chars
+                    if remaining <= 0:
+                        break
+                    content = content[:remaining]
+                    excerpts.append(content)
+                    seen.add(content)
+                    total_chars += len(content)
+                    if len(excerpts) >= limit:
+                        break
+                return {"result": {"excerpts": excerpts, "query": query}}
             except Exception as exc:
                 return {"error": f"Honcho search failed: {exc}"}
 
@@ -1133,23 +1277,73 @@ def _run_local_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
             }}
 
         # ── Multi-CLI delegation tools (criterion #23-#25) ─────────────────
-        elif name in ("local_delegate_suggest", "local_delegate_assemble",
-                       "local_delegate_execute", "local_delegate_eta", "local_delegate_health"):
-            try:
-                from delegation_agent import (
-                    suggest_platform,
-                    assemble_prompt,
-                    execute_delegation,
-                    execute_with_fallback,
-                    estimate_eta,
-                    get_health_snapshot,
-                    clear_platform_health,
-                    mark_platform_broken,
-                    _FALLBACK_CHAIN,
-                    _USER_ETA_CORRECTION,
+        elif name in ("local_delegate_quick", "local_delegate_status", "local_delegate_suggest",
+                       "local_delegate_assemble", "local_delegate_execute", "local_delegate_eta",
+                       "local_delegate_health"):
+            suggest_platform = _local_delegation_agent.suggest_platform
+            assemble_prompt = _local_delegation_agent.assemble_prompt
+            execute_delegation = _local_delegation_agent.execute_delegation
+            execute_with_fallback = _local_delegation_agent.execute_with_fallback
+            observe_delegation = _local_delegation_agent.observe_delegation
+            estimate_eta = _local_delegation_agent.estimate_eta
+            get_health_snapshot = _local_delegation_agent.get_health_snapshot
+            clear_platform_health = _local_delegation_agent.clear_platform_health
+            mark_platform_broken = _local_delegation_agent.mark_platform_broken
+            is_valid_session_id = _local_delegation_agent.is_valid_session_id
+            lookup_delegation = _local_delegation_agent.lookup_delegation
+            _FALLBACK_CHAIN = _local_delegation_agent._FALLBACK_CHAIN
+            _USER_ETA_CORRECTION = _local_delegation_agent._USER_ETA_CORRECTION
+
+            if name == "local_delegate_status":
+                session_id = str(args.get("sessionId") or "").strip()
+                platform = str(args.get("platform") or "").strip().lower()
+                if not is_valid_session_id(session_id):
+                    return {"error": "invalid delegation session_id"}
+                if platform not in {"opencode", "codex"}:
+                    return {"error": "unsupported sandboxed delegation platform"}
+                recorded = lookup_delegation(session_id, platform)
+                if not recorded:
+                    return {"error": "delegation session was not found"}
+                result = observe_delegation(recorded, wait_seconds=0)
+                return {"result": result}
+
+            if name == "local_delegate_quick":
+                import time as _t
+
+                goal = str(args.get("goal") or "").strip()
+                if not goal:
+                    return {"error": "goal is required"}
+                goal = goal[:8000]
+                platform = str(args.get("platform") or "auto").strip().lower()
+                if platform not in {"auto", "opencode", "codex"}:
+                    return {"error": "unsupported sandboxed delegation platform"}
+                if platform == "auto":
+                    suggestion = suggest_platform(
+                        goal=goal,
+                        project_size="small",
+                        scope="code",
+                        complexity="medium",
+                        user_id=None,
+                    )
+                    platform = str(suggestion.get("suggestion") or "opencode")
+                if platform not in {"opencode", "codex"}:
+                    platform = "opencode"
+                session_id = "live-{}-{}".format(int(_t.time() * 1000), secrets.token_hex(4))
+                prompt = assemble_prompt(
+                    goal=goal,
+                    subgoals=[],
+                    platform=platform,
+                    project_root=args.get("workdir"),
                 )
-            except Exception as exc:
-                return {"error": f"delegation module import failed: {exc}"}
+                result = execute_with_fallback(
+                    prompt=prompt,
+                    platform=platform,
+                    session_id=session_id,
+                    workdir=args.get("workdir"),
+                )
+                result = observe_delegation(result, wait_seconds=3.0)
+                result.setdefault("status", "failed" if result.get("error") else "started")
+                return {"result": result}
 
             if name == "local_delegate_suggest":
                 result = suggest_platform(
@@ -1163,16 +1357,20 @@ def _run_local_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
                 try:
                     health = get_health_snapshot()
                     if isinstance(result, dict) and "available_platforms" in result:
-                        healthy = [p for p in result["available_platforms"] if p not in health]
-                        removed = [p for p in result["available_platforms"] if p in health]
+                        available = list(result["available_platforms"])
+                        safe_platforms = {"opencode", "codex"}
+                        unsafe = [p for p in available if p not in safe_platforms]
+                        healthy = [p for p in available if p in safe_platforms and p not in health]
+                        removed = [p for p in available if p in safe_platforms and p in health]
                         result["available_platforms"] = healthy
+                        result["unsafe_platforms"] = unsafe
                         result["unhealthy_platforms"] = removed
                         result["unhealthy_reasons"] = {p: health[p].get("reason", "?") for p in removed}
-                        # Re-pick best if the original suggestion is broken
-                        if result.get("suggestion") in removed and healthy:
+                        original = result.get("suggestion")
+                        if original not in healthy and healthy:
                             result["suggestion"] = healthy[0]
                             result["reason"] = (
-                                f"Original pick `{result.get('suggestion')}` was unhealthy; "
+                                f"Original pick `{original}` was unavailable for sandboxed Live execution; "
                                 f"re-routed to `{healthy[0]}`."
                             )
                             result["was_fallback"] = True
@@ -1208,6 +1406,8 @@ def _run_local_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
             if name == "local_delegate_execute":
                 import time as _t
                 platform = args.get("platform", "opencode")
+                if platform not in {"opencode", "codex"}:
+                    return {"error": "unsupported sandboxed delegation platform"}
                 session_id = args.get("session_id", f"del-{int(_t.time())}")
                 # Use execute_with_fallback so broken platforms auto-route (criterion #5)
                 result = execute_with_fallback(
@@ -1247,26 +1447,35 @@ def _run_local_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
 
             if name == "local_delegate_health":
                 action = args.get("action", "list")
+                safe_platforms = {"opencode", "codex"}
                 if action == "list":
-                    snapshot = get_health_snapshot()
+                    snapshot = {k: v for k, v in get_health_snapshot().items() if k in safe_platforms}
                     return {"result": {
                         "unhealthy": snapshot,
-                        "fallback_chain": _FALLBACK_CHAIN,
+                        "fallback_chain": {k: _FALLBACK_CHAIN.get(k, []) for k in sorted(safe_platforms)},
                         "note": "These platforms are skipped by suggest and auto-routed by execute until TTL expires.",
                     }}
                 if action == "clear":
                     target = args.get("platform")
-                    clear_platform_health(target)
+                    if target and target not in safe_platforms:
+                        return {"error": "unsupported sandboxed delegation platform"}
+                    targets = [target] if target else sorted(safe_platforms)
+                    for platform_name in targets:
+                        clear_platform_health(platform_name)
                     return {"result": {
-                        "cleared": target or "all",
-                        "unhealthy": get_health_snapshot(),
+                        "cleared": target or sorted(safe_platforms),
+                        "unhealthy": {
+                            k: v for k, v in get_health_snapshot().items() if k in safe_platforms
+                        },
                     }}
                 if action == "mark":
                     target = args.get("platform", "")
-                    reason = args.get("reason", "manual mark via tool")
-                    ttl = int(args.get("ttl_seconds", 600))
                     if not target:
                         return {"error": "platform is required for action=mark"}
+                    if target not in safe_platforms:
+                        return {"error": "unsupported sandboxed delegation platform"}
+                    reason = str(args.get("reason", "manual mark via tool"))[:500]
+                    ttl = max(1, min(int(args.get("ttl_seconds", 600)), 3600))
                     mark_platform_broken(target, reason, ttl)
                     return {"result": {
                         "marked": target,
