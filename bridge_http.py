@@ -249,11 +249,11 @@ async def handle_http_request(reader, writer):
     }
     reason = _HTTP_REASON.get(status, "ERROR")
     response = _format_response(status, response_body, reason=reason)
-    # _format_response already returns bytes (it ends with .encode()),
-    # so write directly. The previous code called .encode() on the bytes
-    # result, raising AttributeError on every successful response and
-    # silently dropping the body — which is why /health and /notes came
-    # back empty.
+    # _format_response already returns complete response bytes by
+    # concatenating ASCII headers with the UTF-8 body. Write that result
+    # directly. The previous code called .encode() on the bytes result,
+    # raising AttributeError on every successful response and silently
+    # dropping the body — which is why /health and /notes came back empty.
     writer.write(response)
     await writer.drain()
     writer.close()
@@ -274,14 +274,15 @@ def _format_response(status: int, body: str, reason: Optional[str] = None) -> by
             413: "PAYLOAD TOO LARGE",
             500: "INTERNAL SERVER ERROR",
         }.get(status, "ERROR")
-    return (
+    body_bytes = body.encode("utf-8")
+    headers = (
         f"HTTP/1.1 {status} {reason}\r\n"
         f"Content-Type: application/json\r\n"
-        f"Content-Length: {len(body)}\r\n"
+        f"Content-Length: {len(body_bytes)}\r\n"
         f"Connection: close\r\n"
         f"\r\n"
-        f"{body}"
-    ).encode()
+    ).encode("ascii")
+    return headers + body_bytes
 
 
 def _hmac_compare(a: bytes, b: bytes) -> bool:
